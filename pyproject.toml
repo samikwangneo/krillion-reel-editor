@@ -1,0 +1,19 @@
+[project]
+name = "krillion-reel"
+version = "0.1.0"
+description = "Turn raw Krillion 1v1 footage into a vertical Instagram Reel"
+requires-python = ">=3.10,<3.13"
+dependencies = [
+  "numpy", "scipy", "opencv-python", "pyyaml", "rich",
+  "rapidocr-onnxruntime", "rapidfuzz", "whisperx",
+]
+
+[project.scripts]
+krillion-reel = "krillion_reel.cli:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,0 +1,69 @@
+raw_root: raw
+out_root: out
+work_root: work
+files:
+  p1_screen: p1_screen.*
+  p2_screen: p2_screen.*
+  p1_cam: p1_cam.*
+  p2_cam: p2_cam.*
+cam_audio_track:
+  p1: null
+  p2: null
+players:
+  p1: P1
+  p2: P2
+questions: 7
+drop_questions: []
+tiers:
+- plankton
+- schooler
+- rare
+- deep cut
+- one in a krillion
+timeline:
+  lead: 3.5
+  include_results: true
+  ending_hold: 3.5
+cut:
+  min_gap: 0.8
+  padding: 0.25
+  protect_before: 0.5
+  protect_after: 2.0
+  static_motion: 0.004
+  speech_db_above_floor: 12
+layout:
+  reveal_before: 1.0
+  reveal_after: 2.5
+  min_shot: 3.0
+  max_shot: 8.0
+  min_cam_height: 620
+  label_font: C:/Windows/Fonts/arialbd.ttf
+zoom:
+  enabled: true
+  strength: 1.0
+  ease: 0.2
+  hold: 0.6
+  ease_out: 0.4
+  idle_after: 4.0
+  idle_strength: 1.04
+  tiers:
+    plankton: 1.08
+    schooler: 1.1
+    rare: 1.15
+    deep cut: 1.2
+    one in a krillion: 1.3
+whisper:
+  model: small.en
+  device: cpu
+  compute_type: int8
+  language: en
+audio:
+  lufs: -14
+  game_audio_db: -12
+output:
+  width: 1080
+  height: 1920
+  fps: 30
+  max_seconds: 240
+  preset: veryfast
+  crf: 20

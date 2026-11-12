@@ -1,0 +1,6 @@
+raw/
+out/
+work/
+.venv/
+__pycache__/
+*.egg-info/
