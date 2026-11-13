@@ -38,7 +38,7 @@ DEFAULTS: dict = {
               "min_fast": 2.0},
     # One team on screen at a time (their cam on top, their game below), cutting between teams.
     "layout": {
-        "answering": "highlights",  # highlights | interleave | sequential | alternate (see edl.py)
+        "answering": "model",    # model | highlights | interleave | sequential | alternate (see edl.py)
         "highlights": {          # answering: highlights - the shorter cut
             "think_after_read": 5.0,     # each team's first seconds of thinking after reading the prompt
             "middle": 4.0,               # liveliest bit of each team's discussion in between

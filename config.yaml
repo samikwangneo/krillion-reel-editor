@@ -44,7 +44,9 @@ speed:                    # everything plays at `boring` speed, except...
   slow_results: false         # true: final score at 1x
   min_fast: 2.0               # 1.25x stretches shorter than this stay 1x
 layout:
-  answering: highlights   # highlights = shorter cut: one team reading, 5s of each team thinking,
+  answering: model        # model = Claude picks the clips from out/<session>/brief.md into picks.json
+                          #   (checked against the highlights rules; no picks -> the highlights cut)
+                          # highlights = shorter cut: one team reading, 5s of each team thinking,
                           #   the liveliest 4s of each team's middle, both teams' last 10s
                           # interleave = cut between teams after someone finishes a line; each team
                           #   resumes where it was left, so no thinking is lost

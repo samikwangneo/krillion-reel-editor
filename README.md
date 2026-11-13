@@ -62,7 +62,26 @@ cached `sync.json` and detection caches; `--force` renders despite open checkpoi
   width and sitting 150px above the bottom (`layout.bottom_safe`) so the answer bar stays clear of
   the Instagram caption. That band is a dimmed blur of the game.
   The video cuts fully between teams. Each question is a sequence of clips (`edl.json` -> `clips`).
-  With `layout.answering: highlights` (the default, the shorter cut), each question is:
+  With `layout.answering: model` (the default), Claude picks the clips:
+  1. `krillion-reel brief raw/dayN` (or `run`, which stops here) writes `out/dayN/brief.md`. It has
+     each question's timings, both teams' timestamped transcripts with loud lines marked, the
+     loudest moments, the automatic cut for comparison, and frame sheets in
+     `out/dayN/brief_frames/`.
+  2. In Claude Code, ask Claude to **"edit dayN"**. It reads the brief and writes
+     `out/dayN/picks.json`: per question, the opening and middle clips it thinks are worth keeping,
+     each with a reason and an optional `"speed": 1.0`. This runs on your Claude subscription;
+     no API key is needed.
+  3. `krillion-reel cut raw/dayN` to review, then `render`. The picks are checked against the rules
+     below:
+     * Anything the picks leave out of the reading or first-5s windows is added back.
+     * Nothing replays, and a team never jumps backwards.
+     * The last 10s and the uncut submit -> reaction shots are always added automatically.
+
+     Each clip in `edl.json` says `model: ...` or `rule: ...`. A question missing from `picks.json`
+     gets the automatic highlights cut. Without a `picks.json`, `run`/`render` stop at a checkpoint;
+     `--force` renders the automatic cut instead.
+
+  With `highlights` (the automatic shorter cut), each question is:
   1. one team reading the prompt aloud, from when it appears until they finish;
   2. 5s of that team thinking, then 5s of the other team right after *they* finish reading;
   3. the liveliest 4s (loudest and most talking) of each team's middle discussion, with the rest of

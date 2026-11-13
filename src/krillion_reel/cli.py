@@ -3,6 +3,7 @@
   krillion-reel run [raw/day1]      sync -> cut -> preview -> render, stopping at checkpoints
   krillion-reel sync [session]      Step 1 only (writes out/<session>/sync.json)
   krillion-reel cut [session]       Step 2 only (writes out/<session>/edl.json)
+  krillion-reel brief [session]     out/<session>/brief.md for Claude to pick clips from (answering: model)
   krillion-reel review [session]    print sync + EDL summary
   krillion-reel stills [session]    a still of each team at its first reveal (check framing/zoom)
   krillion-reel preview [session]   10s low-res preview around the first reveal + a still frame
@@ -14,6 +15,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from . import brief as brief_mod
 from . import edl as edl_mod
 from . import render as R
 from . import sync as sync_mod
@@ -60,11 +62,13 @@ def main(argv=None):
             stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(prog="krillion-reel", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("command", choices=["run", "sync", "cut", "review", "stills", "preview", "render"])
+    ap.add_argument("command", choices=["run", "sync", "cut", "brief", "review", "stills", "preview", "render"])
     ap.add_argument("session", nargs="?", help="session folder, e.g. raw/day1 (default: newest folder in raw/)")
     ap.add_argument("--config", default="config.yaml")
     ap.add_argument("--redetect", action="store_true", help="ignore sync.json and re-run detection")
-    ap.add_argument("--force", action="store_true", help="render even if checks fail (unconfirmed sync, >max length)")
+    ap.add_argument("--force", action="store_true",
+                    help="render even if checks fail (unconfirmed sync, >max length, no picks.json in model mode)")
+    ap.add_argument("--no-frames", action="store_true", help="brief: skip the cam/game frame sheets")
     a = ap.parse_args(argv)
 
     cfg = load_config(Path(a.config))
@@ -78,7 +82,24 @@ def main(argv=None):
         _report(issues)
         return 0
 
+    model_mode = cfg["layout"].get("answering") == "model"
+    if a.command == "brief" or (a.command == "run" and model_mode and not brief_mod.picks_path(sess).exists()
+                                and not (sess.out / "brief.md").exists()):
+        out = brief_mod.write_brief(sess, sync, cfg, frames=not a.no_frames)
+        print(f"[brief] {out}")
+        print(f"  Next: ask Claude to \"edit {sess.name}\" - it reads the brief and writes "
+              f"{brief_mod.picks_path(sess)}; then run `krillion-reel render {sess.raw.as_posix()}`.")
+        if a.command == "brief":
+            return 0
+    if a.command == "run" and model_mode and not brief_mod.picks_path(sess).exists() and not a.force:
+        _report(issues + [f"waiting for {brief_mod.picks_path(sess)}: ask Claude to \"edit {sess.name}\" "
+                          f"(it reads out/{sess.name}/brief.md), or pass --force for the automatic cut"])
+        return 2
+
     edl = edl_mod.load_or_build(sess, sync, cfg, rebuild=True)
+    if model_mode:
+        print(f"[cut] answering: model - {brief_mod.picks_summary(sess)}"
+              + ("" if brief_mod.picks_path(sess).exists() else " (using the automatic highlights cut)"))
     if a.command in ("cut", "review"):
         print_sync(sync, cfg) if a.command == "review" else None
         print_edl(edl)
@@ -111,6 +132,10 @@ def main(argv=None):
 
     # final render gates
     blockers = list(issues)
+    if model_mode and not brief_mod.picks_path(sess).exists():
+        issues.append(f"answering: model but no {brief_mod.picks_path(sess)} yet - ask Claude to \"edit "
+                      f"{sess.name}\" (reads out/{sess.name}/brief.md), or pass --force for the automatic cut")
+        blockers = list(issues)
     if not _length_check(sync, edl, cfg):
         blockers.append("reel too long")
     if blockers and not a.force:
