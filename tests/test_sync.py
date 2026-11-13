@@ -56,3 +56,36 @@ def test_zoom_bigger_for_rarer_tiers_and_disable():
     assert 1.14 < z_rare < 1.16 and z_top > z_rare
     cfg["zoom"]["enabled"] = False
     assert zoom.curve(300, 30, [(2.0, "rare")], cfg).max() == 1.0
+
+
+def test_reaction_mask_pads_before_and_after():
+    import numpy as np
+    import pytest
+    from krillion_reel.edl import GRID, reaction_mask
+    db = np.full(200, -50.0)
+    db[100:103] = -10.0  # one loud burst at 10.0-10.3s
+    m = reaction_mask(db, 95, (0.5, 1.5))
+    on = np.where(m)[0] / GRID
+    assert on.min() == pytest.approx(10.0 - 0.5 - 0.2, abs=0.11)   # smoothing widens by ~0.2s
+    assert on.max() == pytest.approx(10.2 + 1.5 + 0.2, abs=0.11)
+
+
+def test_reader_keeps_up_when_sped_up(tmp_path):
+    """Reading at 1.25x must return the frame at the requested time, not drift back to 1x."""
+    import subprocess
+    from krillion_reel import ff
+    from krillion_reel.render import Reader
+    src = tmp_path / "count.mkv"  # frame N has brightness N (lossless)
+    subprocess.run([ff.tool("ffmpeg"), "-hide_banner", "-loglevel", "error", "-f", "lavfi",
+                    "-i", "color=black:s=32x32:r=30:d=8,format=gray,geq=lum='N'", "-c:v", "ffv1", str(src)],
+                   check=True)
+    ref = Reader(src, "fps=30", 32, 32, 30)
+    table = [int(ref.get(k / 30)[16, 16, 0]) for k in range(240)]
+    ref.close()
+    r = Reader(src, "fps=30", 32, 32, 30)
+    for k in range(150):  # 1.25x from t=0.5s, then a jump forward and a jump back
+        t = 0.5 + k * 1.25 / 30
+        assert abs(table.index(int(r.get(t)[16, 16, 0])) - t * 30) <= 0.5 + 1e-6, t
+    for t in (7.0, 2.0, 2.0 + 1 / 30):
+        assert abs(table.index(int(r.get(t)[16, 16, 0])) - t * 30) <= 0.5 + 1e-6, t
+    r.close()

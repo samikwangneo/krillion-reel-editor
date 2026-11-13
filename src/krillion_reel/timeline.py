@@ -19,6 +19,7 @@ class Track:
     reveal: float | None  # screen time of the reveal
     tier: str | None
     offset: float     # cam_offset (cam_t = screen_t + offset)
+    submit: float | None = None  # screen time the answer was submitted (DIVE)
 
     def screen_t(self, r: float, fps: float) -> float:
         return self.start + min(r, max(0.0, self.length - 1.0 / fps))
@@ -67,7 +68,7 @@ def build(sync: dict, cfg: dict) -> list[Segment]:
             if e.get("reveal") is not None:
                 end = max(end, e["reveal"] + 0.35)  # card fully faded in
             tracks[p] = Track(start=start, length=end - start, reveal=e.get("reveal"), tier=e.get("tier"),
-                              offset=offs[p])
+                              offset=offs[p], submit=e.get("submit"))
         length = max(t.length for t in tracks.values())
         segs.append(Segment(q["n"], m, length, tracks))
         m += length

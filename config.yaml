@@ -9,12 +9,10 @@ files:
 cam_audio_track:
   p1: null
   p2: null
-players:
-  p1: P1
-  p2: P2
 questions: 7
 drop_questions: []
 tiers:
+- nothing landed   # ran out of time / answer didn't score
 - plankton
 - schooler
 - rare
@@ -25,19 +23,48 @@ timeline:
   include_results: true
   ending_hold: 3.5
 cut:
-  min_gap: 0.8
-  padding: 0.25
+  min_gap: 1.5
+  padding: 0.4
   protect_before: 0.5
   protect_after: 2.0
+  protect_thinking: true
   static_motion: 0.004
   speech_db_above_floor: 12
+speed:                    # everything plays at `boring` speed, except...
+  enabled: true
+  boring: 1.25
+  normal_tiers: [deep cut, one in a krillion]   # ...these reveals + the reaction, at 1x
+  around_reveal: [0.3, 3.0]   # 1x from 0.3s before the card to 3s after
+  reaction_max: 6.0           # and on while they're still loud, up to 6s after the card
+  reaction_percentile: 93     # "loud" = this team's loudest 7%
+  reaction_pad: [0.5, 1.5]
+  slow_submit: false          # true: also 1x around the answer being submitted (around_submit)
+  around_submit: [1.5, 0.5]
+  slow_reactions: false       # true: also 1x for every loud reaction
+  slow_results: false         # true: final score at 1x
+  min_fast: 2.0               # 1.25x stretches shorter than this stay 1x
 layout:
+  answering: highlights   # highlights = shorter cut: one team reading, 5s of each team thinking,
+                          #   the liveliest 4s of each team's middle, both teams' last 10s
+                          # interleave = cut between teams after someone finishes a line; each team
+                          #   resumes where it was left, so no thinking is lost
+                          # sequential = one team's full thinking, then the other's
+                          # alternate  = shared clock, cuts between teams (loses ~half of each think)
+  highlights:
+    think_after_read: 5.0      # each team's first seconds of thinking after reading the prompt
+    middle: 4.0                # liveliest bit of each team's discussion in between
+    end_before_submit: 10.0    # always keep each team's last seconds before submitting
+    no_cut_before_submit: 3.0  # final shot runs uncut from here through the card + reaction
+    read_max: 8.0              # look this long for them reading the prompt aloud
+    read_fallback: 1.5         # nobody read it aloud: show the prompt until clock start + this
+  pause_search: 4.0       # interleave: how long to wait for the end of a line before cutting anyway
   reveal_before: 1.0
   reveal_after: 2.5
+  big_reveal_after: 4.0   # deep cut / krillion reveals stay on at least this long (+ while still loud)
   min_shot: 3.0
   max_shot: 8.0
   min_cam_height: 620
-  label_font: C:/Windows/Fonts/arialbd.ttf
+  bottom_safe: 150   # px kept clear at the bottom (Instagram caption overlay)
 zoom:
   enabled: true
   strength: 1.0
@@ -47,6 +74,7 @@ zoom:
   idle_after: 4.0
   idle_strength: 1.04
   tiers:
+    nothing landed: 1.06
     plankton: 1.08
     schooler: 1.1
     rare: 1.15
@@ -64,6 +92,7 @@ output:
   width: 1080
   height: 1920
   fps: 30
-  max_seconds: 240
+  max_seconds: null   # no length limit
   preset: veryfast
   crf: 20
+  workers: 1        # >1 renders chunks in parallel - only helps if decoding is not already using every core

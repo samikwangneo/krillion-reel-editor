@@ -31,7 +31,6 @@ then
 |---|---|
 | cam sync came from a fallback (screen recording had no audio) | watch `out/<session>/preview.mp4`; if OK set `cam_offset.pX.confirmed: true` in `sync.json`, otherwise edit `seconds` |
 | not exactly 7 prompts / a tier not recognised | fix the entry in `sync.json` (frames are in `work/<session>/pX_screen_ocr/`, 4 per second) |
-| reel longer than `max_seconds` (180) | it prints which questions to drop; put them in `drop_questions` |
 
 Individual steps: `sync`, `cut`, `review`, `stills`, `preview`, `render`. `--redetect` ignores the
 cached `sync.json` and detection caches; `--force` renders despite open checkpoints.
@@ -42,12 +41,15 @@ cached `sync.json` and detection caches; `--force` renders despite open checkpoi
   (`cam_view`), and per-question `clock_start` / `reveal` / `tier_end` / `tier`. Re-running uses it as-is.
 * `out/<session>/edl.json` - rebuilt from sync.json + config on every run; read the `cuts[].reason`
   to review what was removed.
-* `config.yaml` - player names, padding / min gap / protected reveal window, zoom strength
-  (`zoom.enabled: false` turns zooms off), layout, loudness, output limits.
+* `config.yaml` - padding / min gap / protected windows, speed-ups (`speed.enabled: false` or
+  `speed.boring: 1.0` turns them off), zoom strength (`zoom.enabled: false` turns zooms off),
+  layout, loudness. No length limit by default; set `output.max_seconds` to get drop suggestions,
+  or list questions in `drop_questions`.
 
 ## How it works
 
-* **Sync.** Screen events come from the game UI. The pink DIVE button marks when the clock is
+* **Sync.** Screen events come from the game UI. The game area is found from the DEPTH / SCORE bar
+  and DIVE button (or from DIVE alone when a short browser window scrolls the bar out of view). The pink DIVE button marks when the clock is
   running. OCR of the tier card ("DEEP CUT", "RARE", ... and the DESCEND/SURFACE button) marks the
   reveal. The prompt text pairs questions across players. Each cam is matched to its screen by
   cross-correlating audio, which works when the cam mic hears the game's sounds. If the screen
@@ -57,14 +59,44 @@ cached `sync.json` and detection caches; `--force` renders despite open checkpoi
   together. It ends when the slower player clicks DESCEND. The faster player's screen holds on its
   tier card, while their cam keeps rolling.
 * **Layout.** One team is on screen at a time: their cam on top and their game below, filling the
-  width. The video cuts fully between teams. Each question is a sequence of clips (`edl.json` -> `clips`):
-  1. the prompt and the answering, cutting between teams by who is talking (each shot at least 3s,
-     switching after 8s at most);
-  2. the first team's reveal, from 1s before the card to 2.5s after;
-  3. the second team's reveal, rewound a few seconds if both cards landed at the same moment.
-* **Cuts.** A stretch is cut only when the on-screen team is silent (no words and quiet mic) and
-  their game screen is static. Nothing within 0.5s before or 2s after a reveal is cut. 0.25s of padding is
-  kept on each side of a cut.
+  width and sitting 150px above the bottom (`layout.bottom_safe`) so the answer bar stays clear of
+  the Instagram caption. That band is a dimmed blur of the game.
+  The video cuts fully between teams. Each question is a sequence of clips (`edl.json` -> `clips`).
+  With `layout.answering: highlights` (the default, the shorter cut), each question is:
+  1. one team reading the prompt aloud, from when it appears until they finish;
+  2. 5s of that team thinking, then 5s of the other team right after *they* finish reading;
+  3. the liveliest 4s (loudest and most talking) of each team's middle discussion, with the rest of
+     the middle cut;
+  4. both teams' last 10s before submitting, interleaved. Each team's final shot runs uncut from 3s
+     before they submit, through the card dropping and the whole reaction.
+
+  Lengths are in `layout.highlights`. Two clips of the same team less than 1.5s apart play straight
+  through, so there are no micro-jumps.
+
+  With `interleave`, it cuts back and forth while the teams think,
+  but each team keeps its own place, so going back to a team picks up exactly where it was left and
+  no thinking is lost:
+  * A shot lasts at least 3s and until the team has caught up with where the other team was left.
+  * It then cuts right after the team on screen finishes a line: a sentence end or breath from the
+    WhisperX words, otherwise a gap between words, looking up to `pause_search` (4s) ahead.
+  * Once both teams have submitted, both reveals play. The lower tier goes first so the better card
+    lands last. On a tie, the team that goes first alternates from question to question.
+
+  Other modes:
+  * `sequential`: one team's whole think, then the other's.
+  * `alternate`: shorter, but about half of each team's thinking is lost. Both teams share one clock.
+* **Cuts.** A stretch of at least 1.5s is cut only when the on-screen team is silent (no words and
+  quiet mic) and their game screen is static. The thinking time (prompt card up to the answer being
+  submitted) and 0.5s before to 2s after a reveal are never cut. 0.4s of padding is kept on each
+  side of a cut.
+* **Speed.** Everything plays at 1.25x (video and pitch-preserved audio), except a DEEP CUT or ONE IN
+  A KRILLION reveal (`speed.normal_tiers`). Those run at normal speed from 0.3s before the card to
+  3s after, and stay at normal speed while the team is still loud (their loudest 7% of mic level),
+  up to 6s after.
+  * The reveal clip stays on for at least 4s for those tiers (`layout.big_reveal_after`), even after
+    they click DESCEND. The tier card holds while the cam keeps rolling.
+  * `slow_submit`, `slow_reactions` and `slow_results` turn normal speed back on for those parts.
+  * Fast bits shorter than 2s stay at normal speed.
 * **Render.** FFmpeg decodes, crops and scales each source. Python composites the frame, applies
-  zoom punches and labels, and pipes it to libx264 (veryfast). The audio follows the on-screen team: their mic, plus their game sound at -12 dB if it was
-  recorded It is loudness-normalized in two passes to -14 LUFS.
+  zoom punches, and pipes it to libx264 (veryfast). The audio follows the on-screen team: their mic, plus their game sound at -12 dB if it was
+  recorded. It is loudness-normalized in two passes to -14 LUFS.

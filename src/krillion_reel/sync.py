@@ -36,10 +36,14 @@ def cam_track(sess: Session, cfg: dict, p: str) -> int:
     info = ff.probe(sess.files[f"{p}_cam"])
     if len(info.audio_streams) <= 1:
         return 0
-    # several mic tracks (iPhone): take the loudest in the speech band
+    # several mic tracks (iPhone): take the loudest in the speech band. Skip tracks FFmpeg can't
+    # decode (e.g. iPhone spatial audio, codec apple_apac).
     best, best_rms = 0, -1.0
     for i in range(len(info.audio_streams)):
-        x = media.audio_track(sess.files[f"{p}_cam"], i, sess.work / f"{p}_cam_a{i}.wav")
+        try:
+            x = media.audio_track(sess.files[f"{p}_cam"], i, sess.work / f"{p}_cam_a{i}.wav")
+        except RuntimeError:
+            continue
         rms = float(np.sqrt((x ** 2).mean()))
         if rms > best_rms:
             best, best_rms = i, rms

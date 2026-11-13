@@ -71,20 +71,29 @@ def detect_crop(src: Path, debug_png: Path | None = None, log=print) -> GameCrop
         log(f"  crop scan t={t:6.1f}s anchors={have}")
         if have["depth"] >= 2 and have["score"] >= 2 and have["dive"] >= 2:
             break
-    missing = [k for k in ("depth", "score", "dive") if len(anchors[k]) < 1]
-    if missing:
-        raise RuntimeError(f"{src.name}: could not find game HUD anchors {missing} - is this a Krillion recording?")
-
     med = lambda boxes, i: float(np.median([b[i] for b in boxes]))  # noqa: E731
-    left, right = med(anchors["depth"], 0), med(anchors["score"], 2)
-    top = min(med(anchors["depth"], 1), med(anchors["score"], 1))
+    if not anchors["dive"]:
+        raise RuntimeError(f"{src.name}: could not find the DIVE button - is this a Krillion recording?")
     dive = tuple(med(anchors["dive"], i) for i in range(4))
     bottom = dive[3]
-    gw, gh = right - left, bottom - top
-    x0 = max(0, left - 0.06 * gw)
-    x1 = min(W, right + 0.06 * gw)
-    y0 = max(0, top - 0.025 * gh)
-    y1 = min(H, bottom + 0.045 * gh)
+    if anchors["depth"] and anchors["score"]:
+        left, right = med(anchors["depth"], 0), med(anchors["score"], 2)
+        top = min(med(anchors["depth"], 1), med(anchors["score"], 1))
+        gw, gh = right - left, bottom - top
+        x0 = max(0, left - 0.06 * gw)
+        x1 = min(W, right + 0.06 * gw)
+        y0 = max(0, top - 0.025 * gh)
+        y1 = min(H, bottom + 0.045 * gh)
+    else:
+        # DEPTH/SCORE bar scrolled out of view (short browser window): the game column has a fixed
+        # layout, so size it from the DIVE button (calibrated on full-HUD recordings: column width ~
+        # 14.9x the DIVE label width, DIVE's right edge 0.381 widths right of centre) and take
+        # everything visible above it
+        w = 14.9 * (dive[2] - dive[0])
+        cx = dive[2] - 0.381 * w
+        x0, x1 = max(0, cx - w / 2), min(W, cx + w / 2)
+        y0, y1 = 0.0, min(H, bottom + 0.04 * w)
+        log(f"  {src.name}: no DEPTH/SCORE bar in view - game area estimated from the DIVE button")
     ev = lambda v: int(round(v / 2)) * 2  # noqa: E731
     crop = GameCrop(ev(x0), ev(y0), ev(x1 - x0), ev(y1 - y0), dive, (dive[1], dive[3]))
     if debug_png is not None and last_img is not None:

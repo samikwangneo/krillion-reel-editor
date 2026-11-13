@@ -49,10 +49,15 @@ def print_edl(edl: dict):
     for c in edl["cuts"]:
         print(f"  {c['team']}  r {c['r0']:6.2f}-{c['r1']:6.2f} ({c['r1'] - c['r0']:4.1f}s)  {c['reason']}")
     print(f"\n  per question (s): {edl['per_question_seconds']}")
-    print(f"  total {edl['clips_seconds']:.1f}s -> {edl['total_seconds']:.1f}s after {len(edl['cuts'])} cuts")
+    print(f"  clips {edl['clips_seconds']:.1f}s -> {edl['kept_seconds']:.1f}s after {len(edl['cuts'])} cuts "
+          f"-> {edl['total_seconds']:.1f}s with {edl['sped_up_seconds']:.1f}s of it at "
+          f"{max([k['speed'] for k in edl['keep']] + [1.0])}x")
 
 
 def main(argv=None):
+    for stream in (sys.stdout, sys.stderr):  # OCR'd prompts can contain characters cp1252 can't print
+        if hasattr(stream, "reconfigure"):
+            stream.reconfigure(errors="replace")
     ap = argparse.ArgumentParser(prog="krillion-reel", description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command", choices=["run", "sync", "cut", "review", "stills", "preview", "render"])
@@ -127,7 +132,7 @@ def _report(issues: list[str]):
 
 def _length_check(sync: dict, edl: dict, cfg: dict) -> bool:
     mx = cfg["output"]["max_seconds"]
-    if edl["total_seconds"] <= mx:
+    if not mx or edl["total_seconds"] <= mx:
         return True
     print(f"\n== TOO LONG: {edl['total_seconds']:.1f}s > {mx}s ==")
     print("  Suggested questions to drop (least exciting reveals first). Add them to drop_questions in config.yaml:")
