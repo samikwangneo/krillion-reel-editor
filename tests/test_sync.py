@@ -40,7 +40,10 @@ def test_timeline_aligns_prompts_and_holds_faster_player():
             "questions": [{"n": 1, "p1": q(10, 20, 24, 30), "p2": q(50, 55, 58, 62)}],
             "results": {}}
     segs = timeline.build(sync, DEFAULTS)
-    s = segs[0]
+    intro, s = segs[0], segs[1]
+    # p1's intro: their cam from 0 (screen -1) until the first prompt card (screen 10 - lead)
+    assert intro.n == -1 and list(intro.tracks) == ["p1"]
+    assert intro.tracks["p1"].cam_t(0.0) == 0.0 and abs(intro.length - (6.5 + 1.0)) < 1e-9
     assert abs(s.length - max(30 - 0.25 - 6.5, 62 - 0.25 - 46.5)) < 1e-9
     # both prompts line up at r = lead
     assert s.tracks["p1"].screen_t(3.5, 30) == 10 and s.tracks["p2"].screen_t(3.5, 30) == 50
@@ -89,3 +92,22 @@ def test_reader_keeps_up_when_sped_up(tmp_path):
     for t in (7.0, 2.0, 2.0 + 1 / 30):
         assert abs(table.index(int(r.get(t)[16, 16, 0])) - t * 30) <= 0.5 + 1e-6, t
     r.close()
+
+
+def test_sfx_offset_finds_quiet_game_sounds_under_room_noise():
+    """Game sound effects play quietly in the cam mic under loud noise; sfx_offset still recovers
+    the exact offset (day 4/5: envelope xcorr and the prompt-reading fallback were 1-3s off)."""
+    import numpy as np
+    from krillion_reel import audiosync
+    rate, rng = 16000, np.random.default_rng(0)
+    screen = np.zeros(120 * rate, np.float32)
+    n = np.arange(int(0.4 * rate)) / rate
+    for k, t in enumerate(range(8, 115, 9)):  # a distinct chirp every 9s, silence in between
+        screen[t * rate:t * rate + len(n)] = 0.3 * np.sin(2 * np.pi * (400 + 90 * k + 900 * n) * n)
+    off = 37.42  # cam_t = screen_t + off
+    cam = (0.2 * rng.standard_normal(200 * rate)).astype(np.float32)  # room noise ~15 dB over the game sound
+    s0 = int(round(off * rate))
+    cam[s0:s0 + len(screen)] += 0.15 * screen  # heard faintly through the laptop speakers
+    got, ev = audiosync.sfx_offset(cam, screen, rate, search=(-60, 60))
+    assert got is not None and abs(got - off) < 0.01
+    assert sum(e["agrees"] for e in ev) >= 5

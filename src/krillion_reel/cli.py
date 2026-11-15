@@ -19,9 +19,7 @@ from . import brief as brief_mod
 from . import edl as edl_mod
 from . import render as R
 from . import sync as sync_mod
-from .config import load_config, resolve_session
-
-PLAYERS = ("p1", "p2")
+from .config import PLAYERS, load_config, resolve_session
 
 
 def _fmt(t):
@@ -34,19 +32,21 @@ def print_sync(sync: dict, cfg: dict):
         o = sync["cam_offset"][p]
         print(f"  {p} cam_offset {o['seconds']:+.3f}s  method={o['method']}  confidence={o.get('confidence')}  "
               f"confirmed={o.get('confirmed')}")
-    print(f"  {'Q':>2}  {'p1 clock':>8} {'reveal':>6} {'tier':>17}   {'p2 clock':>8} {'reveal':>6} {'tier':>17}  prompt")
+    print(f"  {'Q':>2}  " + "   ".join(f"{p + ' clock':>8} {'reveal':>6} {'tier':>17}" for p in PLAYERS) + "  prompt")
     for q in sync["questions"]:
-        a, b = q.get("p1") or {}, q.get("p2") or {}
-        print(f"  {q['n']:>2}  {_fmt(a.get('clock_start')):>8} {_fmt(a.get('reveal'))} {str(a.get('tier')):>17}   "
-              f"{_fmt(b.get('clock_start')):>8} {_fmt(b.get('reveal'))} {str(b.get('tier')):>17}  "
-              f"{(q.get('prompt') or '')[:48]}")
-    print(f"  results screen: p1 {sync['results'].get('p1')}  p2 {sync['results'].get('p2')}")
+        cols = []
+        for p in PLAYERS:
+            e = q.get(p) or {}
+            cols.append(f"{_fmt(e.get('clock_start')):>8} {_fmt(e.get('reveal'))} {str(e.get('tier')):>17}")
+        print(f"  {q['n']:>2}  " + "   ".join(cols) + f"  {(q.get('prompt') or '')[:48]}")
+    print("  results screen: " + "  ".join(f"{p} {sync['results'].get(p)}" for p in PLAYERS))
 
 
 def print_edl(edl: dict):
     print("\n== CLIPS ==  (r = seconds into the question, 0 = prompt card appears)")
     for c in edl["clips"]:
-        print(f"  Q{c['question'] or 'end'}  {c['team']}  r {c['r0']:6.2f}-{c['r1']:6.2f} ({c['r1'] - c['r0']:4.1f}s)  {c['why']}")
+        q = {0: "end", -1: "intro"}.get(c["question"], c["question"])
+        print(f"  Q{q}  {c['team']}  r {c['r0']:6.2f}-{c['r1']:6.2f} ({c['r1'] - c['r0']:4.1f}s)  {c['why']}")
     print("\n== CUTS ==")
     for c in edl["cuts"]:
         print(f"  {c['team']}  r {c['r0']:6.2f}-{c['r1']:6.2f} ({c['r1'] - c['r0']:4.1f}s)  {c['reason']}")
@@ -54,6 +54,10 @@ def print_edl(edl: dict):
     print(f"  clips {edl['clips_seconds']:.1f}s -> {edl['kept_seconds']:.1f}s after {len(edl['cuts'])} cuts "
           f"-> {edl['total_seconds']:.1f}s with {edl['sped_up_seconds']:.1f}s of it at "
           f"{max([k['speed'] for k in edl['keep']] + [1.0])}x")
+    fit = edl.get("fit")
+    if fit:
+        print(f"  length fit: {fit['seconds']:.2f}s vs target {fit['target_seconds']}s - {fit['note']} "
+              f"(filler {fit['flexible_source_seconds']:.1f}s of source at {fit['filler_speed']}x)")
 
 
 def main(argv=None):

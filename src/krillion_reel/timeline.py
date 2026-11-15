@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-PLAYERS = ("p1", "p2")
+from .config import PLAYERS
 
 
 @dataclass
@@ -30,7 +30,7 @@ class Track:
 
 @dataclass
 class Segment:
-    n: int             # question number (0 = results ending)
+    n: int             # question number (0 = results ending, -1 = intro)
     master_start: float
     length: float
     tracks: dict[str, Track]
@@ -51,8 +51,19 @@ def build(sync: dict, cfg: dict) -> list[Segment]:
     offs = {p: float(sync["cam_offset"][p]["seconds"]) for p in PLAYERS}
     segs: list[Segment] = []
     m = 0.0
+    intro = cfg["timeline"].get("intro")
+    first_q = next((q for q in sync["questions"] if q["n"] not in drop and q.get(intro or "")), None)
+    if intro in PLAYERS and first_q:
+        # the host's intro: their cam (and idle game screen) from the start of the cam recording until
+        # just before the first prompt. Segment time r = the intro team's cam time.
+        start = -offs[intro]
+        end = first_q[intro]["clock_start"] - lead
+        if end - start > 1.0:
+            segs.append(Segment(-1, m, end - start, {intro: Track(start=start, length=end - start, reveal=None,
+                                                                  tier=None, offset=offs[intro])}))
+            m += end - start
     for q in sync["questions"]:
-        if q["n"] in drop or not q.get("p1") or not q.get("p2"):
+        if q["n"] in drop or not all(q.get(p) for p in PLAYERS):
             continue
         tracks = {}
         for p in PLAYERS:
@@ -75,9 +86,14 @@ def build(sync: dict, cfg: dict) -> list[Segment]:
     res = sync.get("results") or {}
     if cfg["timeline"]["include_results"] and all(res.get(p) is not None for p in PLAYERS):
         hold = cfg["timeline"]["ending_hold"]
-        tracks = {p: Track(start=res[p] - 0.3, length=hold + 0.3, reveal=None, tier=None, offset=offs[p])
-                  for p in PLAYERS}
-        segs.append(Segment(0, m, hold + 0.3, tracks))
+        # sync.json "results_window": {team: [screen_t0, screen_t1]} widens the ending so picks.json
+        # "results" clips can keep post-game banter (the results screen holds while the cam rolls)
+        win = sync.get("results_window") or {}
+        tracks = {}
+        for p in PLAYERS:
+            a, b = win.get(p) or (res[p] - 0.3, res[p] + hold)
+            tracks[p] = Track(start=a, length=b - a, reveal=None, tier=None, offset=offs[p])
+        segs.append(Segment(0, m, max(t.length for t in tracks.values()), tracks))
     return segs
 
 

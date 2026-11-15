@@ -11,6 +11,7 @@ cam_audio_track:
   p2: null
 questions: 7
 drop_questions: []
+groups: []          # 3+ players: sides, e.g. [[p1, p2]]; usually set per session in sync.json "groups"
 tiers:
 - nothing landed   # ran out of time / answer didn't score
 - plankton
@@ -21,7 +22,8 @@ tiers:
 timeline:
   lead: 3.5
   include_results: true
-  ending_hold: 3.5
+  ending_hold: 2.0
+  intro: p1          # open on this team's intro (their cam before the first prompt); null = no intro
 cut:
   min_gap: 1.5
   padding: 0.4
@@ -43,6 +45,8 @@ speed:                    # everything plays at `boring` speed, except...
   slow_reactions: false       # true: also 1x for every loud reaction
   slow_results: false         # true: final score at 1x
   min_fast: 2.0               # 1.25x stretches shorter than this stay 1x
+  filler_max: 1.5             # filler (model picks + answer sinking) may go up to this to hit target_seconds
+  sink_pad: 0.4               # "answer sinking" = submit + this .. card - this
 layout:
   answering: model        # model = Claude picks the clips from out/<session>/brief.md into picks.json
                           #   (checked against the highlights rules; no picks -> the highlights cut)
@@ -53,9 +57,10 @@ layout:
                           # sequential = one team's full thinking, then the other's
                           # alternate  = shared clock, cuts between teams (loses ~half of each think)
   highlights:
-    think_after_read: 5.0      # each team's first seconds of thinking after reading the prompt
+    think_after_read: 3.0      # first seconds of thinking after the prompt is read (reading team)
+    think_after_read_other: 0.0  # same for the other team (0 = only if picked)
     middle: 4.0                # liveliest bit of each team's discussion in between
-    end_before_submit: 10.0    # always keep each team's last seconds before submitting
+    end_before_submit: 5.0     # always keep each team's last seconds before submitting (user: 5-10s)
     no_cut_before_submit: 3.0  # final shot runs uncut from here through the card + reaction
     read_max: 8.0              # look this long for them reading the prompt aloud
     read_fallback: 1.5         # nobody read it aloud: show the prompt until clock start + this
@@ -67,6 +72,7 @@ layout:
   max_shot: 8.0
   min_cam_height: 620
   bottom_safe: 150   # px kept clear at the bottom (Instagram caption overlay)
+  flash: [0.3, 1.7]  # 3+ players: quick look at a non-featured team's card (s before, s after)
 zoom:
   enabled: true
   strength: 1.0
@@ -94,7 +100,8 @@ output:
   width: 1080
   height: 1920
   fps: 30
-  max_seconds: null   # no length limit
+  max_seconds: 179     # IG only pushes reels <= 2:59 to new viewers
+  target_seconds: 179  # filler speed (<= speed.filler_max) is fitted to land exactly here
   preset: veryfast
   crf: 20
   workers: 1        # >1 renders chunks in parallel - only helps if decoding is not already using every core

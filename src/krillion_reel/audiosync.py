@@ -93,3 +93,66 @@ def reaction_offset(cam: np.ndarray, reveal_times: list[float], rate: int = 1600
     second = float(scores[far].max()) if far.any() else 0.0
     conf = float(scores[i] / second) if second > 0 else float("inf")
     return float(best), conf
+
+
+def sfx_offset(cam: np.ndarray, screen: np.ndarray, rate: int = 16000, n_events: int = 25,
+               search: tuple[float, float] = (-300.0, 300.0), tol: float = 0.03,
+               min_votes: int = 4, peaks: int = 5) -> tuple[float | None, list[dict]]:
+    """Find the game's own sound effects (from the screen recording) inside the cam audio.
+
+    Each of the loudest `n_events` 0.6s chunks of screen audio is used as a template and matched
+    (normalised waveform cross-correlation) against the cam audio. The cam mic usually hears the
+    laptop speakers faintly; envelope xcorr misses that under room speech, but the exact waveform
+    of a sound effect still stands out. Each match votes for an offset; returns (median offset of
+    the biggest cluster within `tol`, per-event evidence), or (None, evidence) if fewer than
+    `min_votes` independent events agree.
+    """
+    sos = signal.butter(4, [300, 6000], btype="band", fs=rate, output="sos")
+    c = signal.sosfiltfilt(sos, cam.astype(np.float64))
+    s = signal.sosfiltfilt(sos, screen.astype(np.float64))
+    hop = rate // 100
+    e = np.sqrt((s[: len(s) // hop * hop].reshape(-1, hop) ** 2).mean(axis=1))
+    picked: list[int] = []
+    for i in np.argsort(e)[::-1]:
+        if e[i] <= 0 or len(picked) >= n_events:
+            break
+        if all(abs(int(i) - j) > 150 for j in picked):  # events >= 1.5s apart
+            picked.append(int(i))
+    ev = []
+    L = int(0.6 * rate)
+    # one FFT of the whole cam track, reused for every template; window energy from a running sum
+    nfft = 1 << int(np.ceil(np.log2(len(c) + L)))
+    C = np.fft.rfft(c, nfft)
+    csq = np.concatenate(([0.0], np.cumsum(c ** 2)))
+    en = np.sqrt(np.maximum(csq[L:] - csq[:-L], 1e-9))  # energy of c[k:k+L]
+    for i in sorted(picked):
+        t0 = max(0.0, i / 100 - 0.15)
+        tpl = s[int(t0 * rate):int(t0 * rate) + L]
+        if len(tpl) < L or not np.any(tpl):
+            continue
+        cc = np.fft.irfft(C * np.conj(np.fft.rfft(tpl, nfft)), nfft)[: len(en)]  # cc[k] = sum c[k+j] tpl[j]
+        ncc = np.abs(cc) / en / np.linalg.norm(tpl)
+        lo = max(0, int((t0 + search[0]) * rate)); hi = min(len(ncc), int((t0 + search[1]) * rate))
+        if hi <= lo:
+            continue
+        # each event votes for its top `peaks` matches: under loud room speech the true match is
+        # not always the single best one, but it is almost always among the top few
+        w = ncc[lo:hi].copy()
+        for _ in range(peaks):
+            k = int(np.argmax(w))
+            if w[k] <= 0:
+                break
+            ev.append({"screen_t": round(t0, 2), "offset": round((lo + k) / rate - t0, 4), "ncc": round(float(w[k]), 3)})
+            w[max(0, k - rate // 2):k + rate // 2] = 0
+    best: list[dict] = []
+    for a in ev:
+        cl = [b for b in ev if abs(b["offset"] - a["offset"]) <= tol]
+        cl = list({b["screen_t"]: b for b in sorted(cl, key=lambda b: b["ncc"])}.values())  # 1 vote per event
+        if len(cl) > len(best) or (len(cl) == len(best) and sum(b["ncc"] for b in cl) > sum(b["ncc"] for b in best)):
+            best = cl
+    for b in ev:
+        b["agrees"] = b in best
+    ev = [b for b in ev if b["agrees"]] + [b for b in ev if not b["agrees"]][:25]
+    if len(best) < min_votes:
+        return None, ev
+    return float(np.median([b["offset"] for b in best])), ev

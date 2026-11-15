@@ -26,7 +26,10 @@ def _seg():
 
 def _cfg():
     cfg = {k: (dict(v) if isinstance(v, dict) else v) for k, v in DEFAULTS.items()}
-    cfg["layout"] = {**DEFAULTS["layout"], "answering": "model"}
+    # the rules as these tests were written for: 5s of thinking each, the last 10s before submitting
+    hl = {**DEFAULTS["layout"]["highlights"], "think_after_read": 5.0, "think_after_read_other": 5.0,
+          "end_before_submit": 10.0}
+    cfg["layout"] = {**DEFAULTS["layout"], "answering": "model", "highlights": hl}
     return cfg
 
 

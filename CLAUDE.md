@@ -21,7 +21,10 @@ tier / answer), the transcripts (WhisperX) and each cam's offset (`cam_t = scree
   NOTHING LANDED card. Fill in `reveal` and `tier` in `out/dayN/sync.json` by hand and add a note.
 * **Cam offsets.** This is the step that went wrong before, so check it carefully.
   * `audio_xcorr` with confidence over 3 and agreeing windows: the cam heard the game, so trust it.
-  * A fallback (`prompt_read...`): verify it. OCR when each prompt first appears on that team's
+  * `sfx_match`: the game's own sound effects found waveform-exact in the cam mic. 5+ events agreeing
+    within 0.03s is exact (confirmed automatically); fewer: check `sfx_evidence`. Days 4 and 5 both
+    synced this way once it existed (day 4's hand estimates were 2.3s / 1.0s off).
+  * A fallback (`prompt_read...`): it was 1-3s off on days 4 and 5, so never trust it as is. OCR when each prompt first appears on that team's
     screen (top half of the frames, two prompt words matched). Then check against their WhisperX
     words:
     * They can't read a prompt aloud before it appears. People start reading 0.0-0.3s after it
@@ -35,9 +38,24 @@ tier / answer), the transcripts (WhisperX) and each cam's offset (`cam_t = scree
 ## 3. Pick the clips (Claude's job)
 Run `krillion-reel brief raw/dayN`, read `out/dayN/brief.md` and the `brief_frames/qN.jpg`
 sheets, then write `out/dayN/picks.json` following the instructions at the top of the brief. Keep
-it shorter than the full thing, keeping jokes, roasts, near-misses and good arguments, and cutting
-filler. The rules (prompt reading, 5s of thinking each, both teams' last 10s, the uncut
-submit -> reaction shot) are enforced automatically afterwards.
+jokes, roasts, near-misses and good arguments, and cut filler. The rules (prompt reading once, 3s of
+thinking after it, each team's last 5s before submitting, the uncut submit -> reaction shot) are
+enforced automatically afterwards.
+* **Length: exactly 2:59** (`output.target_seconds: 179`). Your picks and the answer sinking are
+  filler, sped between 1.25x and 1.5x to land on 179s. `cut` prints the fit: add or drop picks until it
+  says "lands exactly on the target".
+* **Intro.** Keep most of p1's intro as `"intro"` in picks.json (only cut mic checks like "testing").
+* **Ending.** Post-game banter (roasts after the last card) can be kept: set
+  `"results_window": {"p1": [scr_t0, scr_t1], ...}` in sync.json and pick from it with
+  `"results": {"clips": [{"team", "r0", "r1"}]}` (r = seconds into that window, played in list order).
+* **Fit fast.** Start picks lean (one short clip per team per middle). The fixed parts (deep cuts at
+  1x, ~11s each) eat most of the budget; drop the weakest question early if over by 25s+.
+* **3+ players** (day 4 had a guest): set `"groups": [["p1", "p2"]]` in sync.json (roommates vs the
+  guest). Each question shows the better roommate (override with `"featured"`) vs the guest; the other
+  roommate gets a 2s look at their card.
+* **FaceTime teammate** on someone's screen recording: set `"facetime": {"p2": {"rect": [x, y, w, h],
+  "corner": "top-center"}}` in sync.json (screen pixels; top-left / top-center / top-right). It's drawn as a bubble on that team's cam. Make
+  sure the game crop excludes the FaceTime pane and any ads.
 
 ## 4. Review, render, verify
 * `krillion-reel cut raw/dayN`. Read the clip list: `model:` = your picks, `rule:` = added by the
@@ -55,6 +73,7 @@ submit -> reaction shot) are enforced automatically afterwards.
 ## User preferences (settled; don't re-ask)
 * Everything plays at 1.25x except DEEP CUT / ONE IN A KRILLION reveals and reactions (1x).
 * One team on screen at a time, no P1/P2 labels. The game sits 150px above the bottom (IG caption).
-* No length limit, but no dead space.
+* Reels must be **2:59 or shorter, ideally exactly 2:59** (IG doesn't push longer reels). No dead space.
+* Every reel opens on p1's intro (p1 cam + idle p1 screen). Keep most of it (user, day 5).
 * **Never re-render or overwrite a reel the user has already posted** unless they ask.
 * Ask before committing.

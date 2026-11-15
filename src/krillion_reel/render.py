@@ -46,7 +46,7 @@ class Piece:
 class Plan:
     fps: int
     n: int
-    shown: np.ndarray                   # team index on screen per output frame (0=p1, 1=p2)
+    shown: np.ndarray                   # team index on screen per output frame (index into PLAYERS)
     screen_t: np.ndarray                # source time of the shown team's screen per output frame
     cam_t: np.ndarray                   # source time of the shown team's cam per output frame
     zoom: dict[str, np.ndarray]
@@ -185,6 +185,45 @@ def _even(v: float) -> int:
     return max(2, int(round(v / 2)) * 2)
 
 
+def _rounded_mask(w: int, h: int, r: int) -> np.ndarray:
+    """float32 alpha (h, w, 1): 1 inside a rounded rectangle, anti-aliased edge."""
+    m = np.zeros((h * 4, w * 4), np.uint8)
+    R4 = r * 4
+    cv2.rectangle(m, (R4, 0), (w * 4 - R4, h * 4), 255, -1)
+    cv2.rectangle(m, (0, R4), (w * 4, h * 4 - R4), 255, -1)
+    for cx, cy in ((R4, R4), (w * 4 - R4, R4), (R4, h * 4 - R4), (w * 4 - R4, h * 4 - R4)):
+        cv2.circle(m, (cx, cy), R4, 255, -1)
+    m = cv2.resize(m, (w, h), interpolation=cv2.INTER_AREA)
+    return (m.astype(np.float32) / 255.0)[:, :, None]
+
+
+@dataclass
+class Bubble:
+    """A teammate on a video call, cut out of that player's screen recording (sync.json "facetime":
+    {"p2": {"rect": [x, y, w, h], "corner": "top-left", "width": 0.34}}), drawn as a rounded inset in
+    the player's cam band (corner: top-left / top-center / top-right / bottom-...). It runs on the cam's clock, so it keeps moving while the game
+    screen holds a tier card."""
+    reader: Reader
+    offset: float       # cam_offset of that player (screen_t = cam_t - offset)
+    duration: float     # screen recording length
+    x: int
+    y: int
+    alpha: np.ndarray   # rounded-rect mask incl. border
+    inner: np.ndarray   # rounded-rect mask of the video itself
+
+    def draw(self, cv: np.ndarray, cam_t: float):
+        t = min(max(cam_t - self.offset, 0.0), self.duration - 0.05)
+        img = self.reader.get(t)
+        h, w = self.alpha.shape[:2]
+        b = (h - img.shape[0]) // 2
+        tile = np.full((h, w, 3), 245, np.float32)              # light border
+        inner = tile[b:b + img.shape[0], b:b + img.shape[1]]
+        m = self.inner
+        inner[:] = inner * (1 - m) + img.astype(np.float32) * m
+        roi = cv[self.y:self.y + h, self.x:self.x + w].astype(np.float32)
+        cv[self.y:self.y + h, self.x:self.x + w] = (roi * (1 - self.alpha) + tile * self.alpha).astype(np.uint8)
+
+
 class Compositor:
     def __init__(self, sess: Session, sync: dict, cfg: dict):
         o, lay = cfg["output"], cfg["layout"]
@@ -217,6 +256,26 @@ class Compositor:
             focus = ((v["focus"][0] - rx) * cw / rw, (v["focus"][1] - ry) * ch / rh)
             self.cams[p] = CamTile(Reader(sess.files[f"{p}_cam"], vf, cw, ch, self.fps), cw, ch, rw * c / cw, focus,
                                    self.W, cam_h)
+        self.bubbles: dict[str, Bubble] = {}
+        for p, ft in (sync.get("facetime") or {}).items():
+            if p not in PLAYERS or not ft.get("rect"):
+                continue
+            x, y, w, h = (int(v) for v in ft["rect"])
+            border, margin = 5, 28
+            bw = _even(self.W * float(ft.get("width", 0.34)))
+            bh = _even(bw * h / w)
+            bh = min(bh, _even(self.cam_h[p] - 2 * margin - 2 * border))
+            bw = min(bw, _even(bh * w / h))
+            vf = f"fps={self.fps},crop={w}:{h}:{x}:{y},scale={bw}:{bh}:flags=bicubic"
+            ow, oh = bw + 2 * border, bh + 2 * border
+            corner = ft.get("corner", "top-right")
+            ox = (margin if "left" in corner else self.W - margin - ow if "right" in corner
+                  else (self.W - ow) // 2)  # "top-center" / "bottom-center"
+            oy = margin if "top" in corner else self.cam_h[p] - margin - oh
+            self.bubbles[p] = Bubble(Reader(sess.files[f"{p}_screen"], vf, bw, bh, self.fps),
+                                     float(sync["cam_offset"][p]["seconds"]),
+                                     float(sync["sources"][f"{p}_screen"]["duration"]), ox, oy,
+                                     _rounded_mask(ow, oh, 34), _rounded_mask(bw, bh, 30))
 
     def frame(self, plan: Plan, i: int) -> np.ndarray:
         p = PLAYERS[int(plan.shown[i])]
@@ -224,6 +283,8 @@ class Compositor:
         ch = self.cam_h[p]
         raw = self.cams[p].reader.get(float(plan.cam_t[i]))
         cv[0:ch] = self.cams[p].render(raw, float(plan.zoom[p][i]))
+        if p in self.bubbles:
+            self.bubbles[p].draw(cv, float(plan.cam_t[i]))
         g = self.games[p].get(float(plan.screen_t[i]))
         gh, gw = g.shape[:2]
         if gw < self.W:  # side bars: dimmed blur of the game behind everything below the cam
@@ -237,7 +298,8 @@ class Compositor:
         return cv
 
     def close(self):
-        for r in [c.reader for c in self.cams.values()] + list(self.games.values()):
+        for r in ([c.reader for c in self.cams.values()] + list(self.games.values())
+                  + [b.reader for b in self.bubbles.values()]):
             r.close()
 
 

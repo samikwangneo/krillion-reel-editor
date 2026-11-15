@@ -50,6 +50,22 @@ thinking, those clips get added back, marked "rule: ..." in edl.json.
 **Speed.** Everything plays at {fast}x except deep cut / one in a krillion reveals. Add
 `"speed": 1.0` to a pick to keep a moment at normal speed, for example a punchline that needs it.
 
+**Length: {target}.** The reel must land on {target} (Instagram only pushes reels up to 2:59).
+Set `"drop_questions": [4]` in picks.json to drop a question for this session when even the
+must-haves don't fit. Your picks without a `"speed"` and the answer sinking (submit -> card) are *filler*: they get
+sped up between {fast}x and {filler_max}x to land exactly on the target. `krillion-reel cut` prints
+the fit: "too long" means drop picks, "short" means add picks (the funniest moments first).
+
+**Intro.** The reel opens on {intro}'s intro (their cam before the first prompt). Pick the part
+worth keeping (~10-15s) as `"intro": {{"clips": [{{"r0": .., "r1": .., "why": ..}}]}}`, r = their
+cam time. Without it the whole intro plays.
+
+**3+ players.** sync.json `"groups"` lists sides, e.g. `[["p1", "p2"]]` (roommates) vs p3. Each
+question shows one member of each group (the featured one) plus everyone ungrouped, so it plays
+like a 1v1. The others get a ~2s look at their card, placed among the reveals in tier order. The
+featured member is the better tier (ties: louder reaction); set `"featured": "p2"` on a question to
+override. Only pick clips of the two teams shown.
+
 ## picks.json
 ```json
 {{
@@ -139,7 +155,9 @@ def _tile(rows: list[list[tuple[np.ndarray, str]]]) -> np.ndarray:
 
 
 def write_brief(sess: Session, sync: dict, cfg: dict, frames: bool = True, log=print) -> Path:
-    segs = [s for s in timeline.build(sync, cfg) if s.n != 0]
+    cfg = {**cfg, "groups": E.groups(sync, cfg)}
+    all_segs = timeline.build(sync, cfg)
+    segs = [s for s in all_segs if s.n > 0]
     sig = E.Signals(sess, cfg)
     prompts = {q["n"]: q.get("prompt") for q in sync["questions"]}
     qinfo = {q["n"]: q for q in sync["questions"]}
@@ -147,8 +165,22 @@ def write_brief(sess: Session, sync: dict, cfg: dict, frames: bool = True, log=p
     fdir = sess.out / "brief_frames"
     if frames:
         fdir.mkdir(parents=True, exist_ok=True)
+    tgt = cfg["output"].get("target_seconds")
     md = [INSTRUCTIONS.format(name=sess.name, end=hl["end_before_submit"], nocut=hl["no_cut_before_submit"],
-                              fast=cfg["speed"]["boring"])]
+                              fast=cfg["speed"]["boring"], filler_max=cfg["speed"].get("filler_max"),
+                              target=f"{int(tgt) // 60}:{int(tgt) % 60:02d}" if tgt else "no limit",
+                              intro=cfg["timeline"].get("intro"))]
+    intro = next((s for s in all_segs if s.n == -1), None)
+    if intro:
+        p = next(iter(intro.tracks))
+        tr = intro.tracks[p]
+        loud = float(np.percentile(sig.db[p], 85))
+        md.append(f"## Intro ({p}, r = cam time, {intro.length:.1f}s until the first prompt)\n")
+        md.append("```")
+        for r0, r1, text in _lines(sig.words[p], tr.start + tr.offset, 0.0, intro.length):
+            mark = "!" if _level(sig, p, tr, r0, max(r1, r0 + 0.2)) > loud else " "
+            md.append(f"{mark} {r0:6.1f}-{r1:6.1f}  {text}")
+        md.append("```\n")
     default: dict = {}
     for c in E.plan_clips(segs, sig, {**cfg, "layout": {**cfg["layout"], "answering": "highlights"}}, prompts):
         default.setdefault(c["question"], []).append(c)
@@ -158,10 +190,14 @@ def write_brief(sess: Session, sync: dict, cfg: dict, frames: bool = True, log=p
         for p in PLAYERS:
             tr = seg.tracks[p]
             rev[p] = (tr.reveal - tr.start) if tr.reveal is not None else tr.length - cfg["layout"]["reveal_after"]
+        shown, flashed, fwhy = E.split_teams(seg, sig, cfg)
         a = E.anchors(seg, sig, cfg, rev, start, prompts.get(seg.n))
         start = 1 - start
         q = qinfo[seg.n]
         md.append(f"## Q{seg.n}: {prompts.get(seg.n) or ''}\n")
+        if flashed:
+            md.append(f"* **Shown: {' vs '.join(shown)}** (" + "; ".join(f"{p}: {w}" for p, w in fwhy.items())
+                      + f"). Quick look only: {', '.join(flashed)}. Override with \"featured\".")
         for p in PLAYERS:
             tr, e = seg.tracks[p], q[p]
             read, aloud = a["read_end"][p]
@@ -170,7 +206,8 @@ def write_brief(sess: Session, sync: dict, cfg: dict, frames: bool = True, log=p
                       f"r {rev[p]:.1f}. **End phase from r {a['end_start'][p]:.1f}** (automatic). "
                       f"Free middle: r {min(read + hl['think_after_read'], a['end_start'][p]):.1f} to "
                       f"{a['end_start'][p]:.1f}.")
-        md.append(f"* Opens on **{a['first']}** reading. Reveal order (lower tier first): {', '.join(a['order'])}.")
+        md.append(f"* Reading aloud first: **{a['first']}** (with only the shown teams, the reading team is the "
+                  f"first of them that reads aloud). Reveal order (lower tier first): {', '.join(a['order'])}.")
         md.append("* Automatic highlights cut, for comparison: " + "; ".join(
             f"{c['team']} {c['r0']:.1f}-{c['r1']:.1f}" for c in default.get(seg.n, [])))
         md.append("")

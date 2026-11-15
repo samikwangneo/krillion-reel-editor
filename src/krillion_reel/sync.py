@@ -14,11 +14,11 @@ import numpy as np
 from rapidfuzz import fuzz
 
 from . import audiosync, faces, ff, media, screen
-from .config import Session
+from .config import PLAYERS, Session
 from .transcribe import transcribe
 
-PLAYERS = ("p1", "p2")
 CONF_OK = 3.0  # xcorr peak / next-best peak
+SFX_VOTES_OK = 5  # independent sound effects that must agree (+-0.03s) to trust sfx_match without review
 
 
 def cam_wav(sess: Session, cfg: dict, p: str, rate: int = 16000) -> Path:
@@ -152,8 +152,8 @@ def detect(sess: Session, cfg: dict, redetect: bool = False, log=print) -> dict:
                               "height": i.height, "rotation": i.rotation, "audio_tracks": len(i.audio_streams)}
 
     # ---- game crop + events per screen (OCR is single-threaded, so run both screens in parallel)
-    log(f"[sync] detecting game area, prompts and reveals on both screens (OCR at {screen.OCR_FPS} fps)...")
-    with ProcessPoolExecutor(max_workers=2) as pool:
+    log(f"[sync] detecting game area, prompts and reveals on {len(PLAYERS)} screens (OCR at {screen.OCR_FPS} fps)...")
+    with ProcessPoolExecutor(max_workers=len(PLAYERS)) as pool:
         futs = {p: pool.submit(_analyze_screen, sess.files[f"{p}_screen"], sess.out / f"debug_crop_{p}.png",
                                sess.work, f"{p}_screen", cfg["tiers"], cfg["questions"], redetect) for p in PLAYERS}
         for p in PLAYERS:
@@ -180,9 +180,22 @@ def detect(sess: Session, cfg: dict, redetect: bool = False, log=print) -> dict:
             if conf >= CONF_OK and consistent:
                 entry["confirmed"] = True
             log(f"[sync] {p}: cam_offset {off:+.3f}s via audio xcorr (confidence {conf:.1f}, windows {checks})")
+            if not entry["confirmed"]:
+                # the game's sound effects, found waveform-exact in the cam mic (day 4/5: the
+                # envelope xcorr failed and the prompt-reading fallback was 1-3s off)
+                s_off, s_ev = audiosync.sfx_offset(cam, scr)
+                votes = [e for e in s_ev if e["agrees"]]
+                entry["sfx_evidence"] = s_ev[:12]
+                if s_off is not None:
+                    entry.update(seconds=round(s_off, 3), method="sfx_match", confidence=len(votes),
+                                 confirmed=len(votes) >= SFX_VOTES_OK)
+                    log(f"[sync] {p}: cam_offset {s_off:+.3f}s via game sound effects heard by the cam "
+                        f"({len(votes)} events agree: {[e['offset'] for e in votes][:8]})")
+                else:
+                    log(f"[sync] {p}: game sound effects not found in the cam audio")
         else:
             log(f"[sync] {p}: screen recording has no audio -> fallback")
-        if not entry.get("confirmed"):
+        if not entry.get("confirmed") and entry.get("method") != "sfx_match":
             qs = data["events"][p]["questions"]
             reveals = [q["reveal"] for q in qs if q.get("reveal") is not None]
             pr_off, pr_ev = prompt_read_offset(words[p], qs)
@@ -217,13 +230,13 @@ def detect(sess: Session, cfg: dict, redetect: bool = False, log=print) -> dict:
         data["cam_offset"][p] = entry
 
     # ---- pair questions across players
-    q1, q2 = data["events"]["p1"]["questions"], data["events"]["p2"]["questions"]
-    for i in range(max(len(q1), len(q2))):
-        a = q1[i] if i < len(q1) else None
-        b = q2[i] if i < len(q2) else None
-        sim = fuzz.token_set_ratio((a or {}).get("prompt") or "", (b or {}).get("prompt") or "") if a and b else 0
-        data["questions"].append({"n": i + 1, "prompt": (a or b or {}).get("prompt"), "prompt_match": round(sim),
-                                  "p1": a, "p2": b})
+    qs = {p: data["events"][p]["questions"] for p in PLAYERS}
+    for i in range(max(len(v) for v in qs.values())):
+        es = {p: (qs[p][i] if i < len(qs[p]) else None) for p in PLAYERS}
+        a = next((e for e in es.values() if e), {})
+        sims = [fuzz.token_set_ratio(a.get("prompt") or "", e.get("prompt") or "") for e in es.values() if e]
+        data["questions"].append({"n": i + 1, "prompt": a.get("prompt"),
+                                  "prompt_match": round(min(sims)) if len(sims) == len(PLAYERS) else 0, **es})
     data["results"] = {p: data["events"][p]["results_start"] for p in PLAYERS}
 
     # ---- cam framing (faces)
@@ -260,8 +273,9 @@ def problems(data: dict, cfg: dict) -> list[str]:
                 out.append(f"Q{q['n']} {p}: no reveal found ({'; '.join(e.get('notes') or [])})")
             elif e.get("tier") is None:
                 out.append(f"Q{q['n']} {p}: tier not recognised - set questions[{q['n'] - 1}].{p}.tier in sync.json")
-        if q.get("p1") and q.get("p2") and q["prompt_match"] < 60:
-            out.append(f"Q{q['n']}: prompts differ between players ({q['p1'].get('prompt')!r} vs {q['p2'].get('prompt')!r})")
+        if all(q.get(p) for p in PLAYERS) and q["prompt_match"] < 60:
+            out.append(f"Q{q['n']}: prompts differ between players ("
+                       + " vs ".join(repr(q[p].get('prompt')) for p in PLAYERS) + ")")
     return out
 
 

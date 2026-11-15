@@ -115,6 +115,7 @@ def _alternate(seg: timeline.Segment, sig: Signals, cfg: dict, r_end: float, sta
     """Shared-clock answering phase [0, r_end): returns [(team_idx, r0, r1, why)]."""
     lay = cfg["layout"]
     fps = cfg["output"]["fps"]
+    T = list(seg.tracks)
     n = int(np.ceil(r_end * GRID))
     if n <= 0:
         return []
@@ -124,8 +125,8 @@ def _alternate(seg: timeline.Segment, sig: Signals, cfg: dict, r_end: float, sta
     for i in range(n):
         r = i / GRID
         other = 1 - cur
-        held = {j: r >= seg.tracks[PLAYERS[j]].length - 1.0 / fps for j in (0, 1)}
-        talk = {j: sig.talking(PLAYERS[j], seg.tracks[PLAYERS[j]].cam_t(r)) for j in (0, 1)}
+        held = {j: r >= seg.tracks[T[j]].length - 1.0 / fps for j in (0, 1)}
+        talk = {j: sig.talking(T[j], seg.tracks[T[j]].cam_t(r)) for j in (0, 1)}
         dur = r - shot_start
         if held[cur] and not held[other]:
             cur, shot_start, reason = other, r, "other team's question is over"
@@ -159,10 +160,11 @@ def _think_split(seg: timeline.Segment, rev: dict, cfg: dict, start: int) -> tup
     """Reveal order (lower tier first so the better card lands last; on a tie the first team
     alternates per question) and where each team's thinking ends (just after they submit)."""
     lay, tiers = cfg["layout"], cfg["tiers"]
-    rank = {p: tiers.index(seg.tracks[p].tier) if seg.tracks[p].tier in tiers else -1 for p in PLAYERS}
-    order = sorted(PLAYERS, key=lambda p: (rank[p], PLAYERS.index(p) != start))
+    T = list(seg.tracks)
+    rank = {p: tiers.index(seg.tracks[p].tier) if seg.tracks[p].tier in tiers else -1 for p in T}
+    order = sorted(T, key=lambda p: (rank[p], T.index(p) != start))
     split = {}
-    for p in PLAYERS:
+    for p in T:
         tr = seg.tracks[p]
         reveal_in = rev[p] - lay["reveal_before"]
         sub = (tr.submit - tr.start + cfg["speed"]["around_submit"][1]) if tr.submit is not None else reveal_in
@@ -171,13 +173,14 @@ def _think_split(seg: timeline.Segment, rev: dict, cfg: dict, start: int) -> tup
 
 
 def _reveal_end(seg: timeline.Segment, p: str, rev: float, sig: Signals | None, cfg: dict) -> float:
-    """Normal tiers: reveal_after past the card (or the DESCEND click, whichever is first). Deep cut /
-    one in a krillion: at least big_reveal_after, and on while they're still loud (up to
-    speed.reaction_max) - past DESCEND too, holding the tier card while the cam keeps rolling."""
+    """Normal tiers: reveal_after past the card. Deep cut / one in a krillion: at least
+    big_reveal_after, and on while they're still loud (up to speed.reaction_max). Both run past the
+    DESCEND click if needed, holding the tier card while the cam keeps rolling (day 5: p2 clicked
+    DESCEND 0.5s after the card, which used to chop their reaction off)."""
     lay, sp = cfg["layout"], cfg["speed"]
     tr = seg.tracks[p]
     if tr.tier not in sp.get("normal_tiers", []) or sig is None:
-        return min(tr.length, rev + lay["reveal_after"])
+        return rev + lay["reveal_after"]
     end = rev + lay.get("big_reveal_after", 4.0)
     while end < rev + sp.get("reaction_max", 6.0) and sig.reacting(p, tr.cam_t(end)):
         end += 1 / GRID
@@ -260,22 +263,25 @@ def anchors(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start: in
       reveal_end   {team: end of their reveal + reaction}
       order        reveal order (lower tier first)"""
     hl = cfg["layout"]["highlights"]
+    T = list(seg.tracks)
     order, split = _think_split(seg, rev, cfg, start)
     sub = {}
-    for p in PLAYERS:
+    for p in T:
         tr = seg.tracks[p]
         sub[p] = (tr.submit - tr.start) if tr.submit is not None else split[p]
-    reads = {p: _read_end(seg, sig, p, prompt, cfg) for p in PLAYERS}
-    first = sorted(PLAYERS, key=lambda p: (not reads[p][1], PLAYERS.index(p) != start))[0]
-    end_start = {p: max(0.0, sub[p] - hl["end_before_submit"]) for p in PLAYERS}
+    reads = {p: _read_end(seg, sig, p, prompt, cfg) for p in T}
+    first = sorted(T, key=lambda p: (not reads[p][1], T.index(p) != start))[0]
+    end_start = {p: max(0.0, sub[p] - hl["end_before_submit"]) for p in T}
+    others = [p for p in T if p != first]
     return {
         "first": first,
-        "other": PLAYERS[1 - PLAYERS.index(first)],
-        "read_end": {p: (min(reads[p][0], end_start[p]), reads[p][1]) for p in PLAYERS},
+        "other": others[0],
+        "others": others,
+        "read_end": {p: (min(reads[p][0], end_start[p]), reads[p][1]) for p in T},
         "submit": sub,
         "end_start": end_start,
-        "final_start": {p: max(0.0, sub[p] - hl["no_cut_before_submit"]) for p in PLAYERS},
-        "reveal_end": {p: _reveal_end(seg, p, rev[p], sig, cfg) for p in PLAYERS},
+        "final_start": {p: max(0.0, sub[p] - hl["no_cut_before_submit"]) for p in T},
+        "reveal_end": {p: _reveal_end(seg, p, rev[p], sig, cfg) for p in T},
         "order": order,
     }
 
@@ -283,15 +289,23 @@ def anchors(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start: in
 def must_keep(a: dict, cfg: dict) -> list[tuple[str, float, float, str]]:
     """Windows the short cut always shows, in play order: (team, r0, r1, what)."""
     hl = cfg["layout"]["highlights"]
-    first, other = a["first"], a["other"]
-    r_end, o_end = a["read_end"][first][0], a["read_end"][other][0]
+    first = a["first"]
+    r_end = a["read_end"][first][0]
     win = [(first, 0.0, r_end, "reading the prompt" if a["read_end"][first][1] else "prompt"),
-           (first, r_end, min(r_end + hl["think_after_read"], a["end_start"][first]), "starts thinking"),
-           (other, o_end, min(o_end + hl["think_after_read"], a["end_start"][other]),
-            "starts thinking (just finished reading)")]
+           (first, r_end, min(r_end + hl["think_after_read"], a["end_start"][first]), "starts thinking")]
+    for o in a["others"]:
+        o_end = a["read_end"][o][0]
+        win.append((o, o_end, min(o_end + _other_think(hl), a["end_start"][o]),
+                    "starts thinking (just finished reading)"))
     win += [(p, a["end_start"][p], a["final_start"][p], "last seconds before submitting") for p in a["order"]]
     win += [(p, a["final_start"][p], a["reveal_end"][p], "submits -> reveal") for p in a["order"]]
     return [w for w in win if w[2] - w[1] >= 0.5]
+
+
+def _other_think(hl: dict) -> float:
+    """Seconds of the non-reading teams' first thinking that are always shown."""
+    v = hl.get("think_after_read_other")
+    return float(hl["think_after_read"] if v is None else v)
 
 
 def _highlights(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start: int,
@@ -305,9 +319,10 @@ def _highlights(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
     Overlapping pieces of a team (short thinks) are trimmed, so nothing plays twice."""
     hl = cfg["layout"]["highlights"]
     a = anchors(seg, sig, cfg, rev, start, prompt)
-    order, first, other = a["order"], a["first"], a["other"]
+    order, first = a["order"], a["first"]
+    T = list(seg.tracks)
     clips: list[dict] = []
-    used: dict[str, list] = {p: [] for p in PLAYERS}
+    used: dict[str, list] = {p: [] for p in T}
 
     def add(p, a, b, why):
         a = max(0.0, a)
@@ -323,23 +338,27 @@ def _highlights(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
         clips.append({"question": seg.n, "team": p, "r0": round(a, 2), "r1": round(b, 2), "why": f"{p} {why}"})
 
     end_start, final_start = a["end_start"], a["final_start"]
-    for p in PLAYERS:  # reserve the end phase so the earlier phases stop before it
+    for p in T:  # reserve the end phase so the earlier phases stop before it
         used[p].append((end_start[p], 1e9))
     # 1 + 2: reading, then each team's first seconds of thinking
-    r_end, o_end = a["read_end"][first][0], a["read_end"][other][0]
+    r_end = a["read_end"][first][0]
     add(first, 0.0, r_end, "reading the prompt" if a["read_end"][first][1] else "prompt")
     add(first, r_end, r_end + hl["think_after_read"], "starts thinking")
-    add(other, o_end, o_end + hl["think_after_read"], "starts thinking (just finished reading)")
+    think_end = {first: r_end + hl["think_after_read"]}
+    for o in a["others"]:
+        o_end = a["read_end"][o][0]
+        add(o, o_end, o_end + _other_think(hl), "starts thinking (just finished reading)")
+        think_end[o] = o_end + _other_think(hl)
     # 3: liveliest bit of each team's middle, in time order
     mids = []
-    for p, e in ((first, r_end), (other, o_end)):
-        w = _liveliest(seg, sig, p, e + hl["think_after_read"], end_start[p], hl["middle"])
+    for p, e in think_end.items():
+        w = _liveliest(seg, sig, p, e, end_start[p], hl["middle"]) if hl["middle"] > 0 else None
         if w:
             mids.append((w[0], p, w))
     for _, p, w in sorted(mids):
         add(p, w[0], w[1], "liveliest moment of the discussion")
     # 4: last seconds before submitting, interleaved (lower tier first, like the reveals)
-    for p in PLAYERS:
+    for p in T:
         used[p] = [u for u in used[p] if u[1] < 1e8]
     for p in order:
         add(p, end_start[p], final_start[p], "last seconds before submitting")
@@ -386,15 +405,21 @@ def apply_picks(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
     "speed": 1.0 to keep that moment at normal speed (big reveals are always 1x anyway)."""
     a = anchors(seg, sig, cfg, rev, start, prompt)
     end_start = a["end_start"]
+    T = list(seg.tracks)
+    opener = picks[0].get("team") if picks else None
+    if opener in T and float(picks[0].get("r0", 1e9)) <= 0.5 and opener != a["first"]:
+        # the picks open on the other team: they are the one shown reading the prompt
+        a["first"], a["others"] = opener, [p for p in T if p != opener]
+        a["other"] = a["others"][0]
     seq: list[dict] = []
     for c in picks:
         p = c.get("team")
-        if p not in PLAYERS:
+        if p not in T:
             continue
         r0, r1 = max(0.0, float(c.get("r0", 0))), min(float(c.get("r1", 0)), end_start[p])
         if r1 - r0 >= 0.5:
             seq.append({"team": p, "r0": r0, "r1": r1, "why": f"model: {c.get('why', '')}".rstrip(": "),
-                        "speed": c.get("speed")})
+                        "speed": c.get("speed"), "flex": c.get("speed") is None})
     must = must_keep(a, cfg)
     opening = [w for w in must if w[3] not in ("last seconds before submitting", "submits -> reveal")]
     for i, (p, w0, w1, what) in enumerate(opening):
@@ -402,16 +427,17 @@ def apply_picks(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
         for g0, g1 in _minus(w0, w1, have):
             if g1 - g0 < 0.5:
                 continue
-            rule = {"team": p, "r0": g0, "r1": g1, "why": f"rule: {what} (missing from picks)", "speed": None}
+            rule = {"team": p, "r0": g0, "r1": g1, "why": f"rule: {what} (missing from picks)", "speed": None,
+                    "flex": False}
             if i == 0 and g0 <= 0.5:  # the prompt reading always opens the question
                 seq.insert(0, rule)
                 continue
             later = [k for k, c in enumerate(seq) if c["team"] == p and c["r0"] >= g1 - 1e-6]
             seq.insert(later[0] if later else len(seq), rule)
     out: list[dict] = []
-    shown_to = {p: 0.0 for p in PLAYERS}  # each team only moves forward in time
+    shown_to = {p: 0.0 for p in T}  # each team only moves forward in time
 
-    def add(p, r0, r1, why, speed=None):
+    def add(p, r0, r1, why, speed=None, flex=False):
         r0 = max(float(r0), shown_to[p] if any(c["team"] == p for c in out) else 0.0)
         if r1 - r0 < 0.5:
             return
@@ -419,10 +445,12 @@ def apply_picks(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
         c = {"question": seg.n, "team": p, "r0": round(r0, 2), "r1": round(r1, 2), "why": f"{p} {why}"}
         if speed is not None:
             c["speed"] = float(speed)
+        if flex:
+            c["flex"] = True
         out.append(c)
 
     for c in seq:
-        add(c["team"], c["r0"], c["r1"], c["why"], c["speed"])
+        add(c["team"], c["r0"], c["r1"], c["why"], c["speed"], c.get("flex", False))
     for p in a["order"]:
         add(p, max(end_start[p], shown_to[p]), a["final_start"][p], "rule: last seconds before submitting")
     for p in a["order"]:
@@ -461,12 +489,13 @@ def _interleave(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
     until it has caught up with where the other team was left, then ends right after the team on
     screen finishes a line (searching up to pause_search further). Both reveals follow."""
     lay = cfg["layout"]
+    T = list(seg.tracks)
     order, split = _think_split(seg, rev, cfg, start)
-    pos = {p: 0.0 for p in PLAYERS}
-    cur = PLAYERS[start]
+    pos = {p: 0.0 for p in T}
+    cur = T[start]
     clips = []
-    while any(pos[p] < split[p] - 0.05 for p in PLAYERS):
-        oth = PLAYERS[1 - PLAYERS.index(cur)]
+    while any(pos[p] < split[p] - 0.05 for p in T):
+        oth = T[1 - T.index(cur)]
         if pos[cur] >= split[cur] - 0.05:
             cur = oth
             continue
@@ -489,64 +518,158 @@ def _interleave(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start
     return clips + _reveal_clips(seg, rev, cfg, order, split, sig)
 
 
+def groups(sync: dict, cfg: dict) -> list[list[str]]:
+    """Teams that are on the same side (e.g. roommates [p1, p2] vs a guest p3), from sync.json "groups"
+    (per session) or config "groups". With more than two players, each group is represented by one
+    featured member per question (see split_teams)."""
+    return [list(g) for g in (sync.get("groups") or cfg.get("groups") or [])]
+
+
+def _reaction_level(sig: Signals, p: str, tr: timeline.Track) -> float:
+    if tr.reveal is None:
+        return float("-inf")
+    db = sig.db[p]
+    i0 = int((tr.reveal + tr.offset) * GRID)
+    v = db[max(0, i0):max(0, i0 + 3 * GRID)]
+    return float(v.mean()) if len(v) else float("-inf")
+
+
+def split_teams(seg: timeline.Segment, sig: Signals, cfg: dict, picks: dict | None = None
+                ) -> tuple[list[str], list[str], dict]:
+    """(shown, flashed, why) for one question. Two players: both shown. More: each group in
+    cfg["groups"] shows one member - picks.json "featured", else the better tier, a tie going to the
+    louder reaction - and its other members only get a short flash of their card."""
+    T = list(seg.tracks)
+    if len(T) <= 2:
+        return T, [], {}
+    tiers = cfg["tiers"]
+    want = ((picks or {}).get(str(seg.n)) or {}).get("featured")
+    shown, flashed, why, grouped = [], [], {}, set()
+    for g in cfg.get("groups") or []:
+        g = [p for p in g if p in seg.tracks]
+        if not g:
+            continue
+        grouped |= set(g)
+        if want in g:
+            best, why[want] = want, "picked in picks.json"
+        else:
+            def key(p):
+                tr = seg.tracks[p]
+                return (tiers.index(tr.tier) if tr.tier in tiers else -1, _reaction_level(sig, p, tr))
+            best = max(g, key=key)
+            tie = sum(key(p)[0] == key(best)[0] for p in g) > 1
+            why[best] = "same tier, louder reaction" if tie else "better tier"
+        shown.append(best)
+        flashed += [p for p in g if p != best]
+    shown += [p for p in T if p not in grouped]
+    if len(shown) != 2:
+        raise SystemExit(f"Q{seg.n}: {len(T)} players but {len(shown)} teams to show ({shown}). Set \"groups\" in "
+                         f"sync.json so that each question comes down to two sides, e.g. [[\"p1\", \"p2\"]].")
+    return sorted(shown, key=T.index), flashed, why
+
+
+def _insert_flash(q_clips: list[dict], seg: timeline.Segment, p: str, rev: dict, cfg: dict) -> None:
+    """A short look at a non-featured team's card + reaction, placed among the reveal shots in tier
+    order (lower first) so the best card still lands last."""
+    tr = seg.tracks[p]
+    if tr.reveal is None:
+        return
+    before, after = cfg["layout"].get("flash", [0.5, 2.0])
+    tiers = cfg["tiers"]
+    rank = lambda t: tiers.index(t) if t in tiers else -1  # noqa: E731
+    c = {"question": seg.n, "team": p, "r0": round(max(0.0, rev[p] - before), 2), "r1": round(rev[p] + after, 2),
+         "why": f"{p} rule: quick look at their card ({tr.tier})"}
+    reveal_shots = [i for i, x in enumerate(q_clips) if x["team"] in rev and x["r0"] <= rev[x["team"]] < x["r1"]]
+    for i in reveal_shots:
+        if rank(seg.tracks[q_clips[i]["team"]].tier) > rank(tr.tier):
+            q_clips.insert(i, c)
+            return
+    q_clips.insert(reveal_shots[-1] + 1 if reveal_shots else len(q_clips), c)
+
+
 def plan_clips(segs: list[timeline.Segment], sig: Signals, cfg: dict,
                prompts: dict | None = None, picks: dict | None = None) -> list[dict]:
     lay = cfg["layout"]
     clips: list[dict] = []
     start = 0
-    for seg in segs:
-        if seg.n == 0:
-            for p in PLAYERS:
-                clips.append({"question": 0, "team": p, "r0": 0.0, "r1": round(seg.tracks[p].length, 2),
-                              "why": "final score"})
+    for full in segs:
+        if full.n == -1:  # intro: picks.json "intro" clips (r = cam time), else all of it
+            p = next(iter(full.tracks))
+            chosen = ((picks or {}).get("intro") or {}).get("clips") or [{"r0": 0.0, "r1": full.length}]
+            for c in chosen:
+                r0, r1 = max(0.0, float(c["r0"])), min(full.length, float(c["r1"]))
+                if r1 - r0 >= 0.3:
+                    clips.append({"question": -1, "team": p, "r0": round(r0, 2), "r1": round(r1, 2),
+                                  "why": f"{p} intro" + (f": {c['why']}" if c.get("why") else "")})
+            continue
+        if full.n == 0:  # ending: picks.json "results" clips (r = seconds into the team's results window)
+            chosen = ((picks or {}).get("results") or {}).get("clips") or [
+                {"team": p, "r0": 0.0, "r1": full.tracks[p].length} for p in full.tracks]
+            for c in chosen:
+                p = c["team"]
+                r0, r1 = max(0.0, float(c["r0"])), min(full.tracks[p].length, float(c["r1"]))
+                if r1 - r0 >= 0.3:
+                    clips.append({"question": 0, "team": p, "r0": round(r0, 2), "r1": round(r1, 2),
+                                  "why": "final score" + (f": {c['why']}" if c.get("why") else "")})
             continue
         rev = {}
-        for p in PLAYERS:
-            tr = seg.tracks[p]
+        for p in full.tracks:
+            tr = full.tracks[p]
             rev[p] = (tr.reveal - tr.start) if tr.reveal is not None else tr.length - lay["reveal_after"]
-        mode = lay.get("answering", "interleave")
-        q_picks = (picks or {}).get(str(seg.n), {}).get("clips") if mode == "model" else None
-        if q_picks:
-            clips += apply_picks(seg, sig, cfg, rev, start, (prompts or {}).get(seg.n), q_picks)
-            start = 1 - start
-            continue
-        if mode in ("highlights", "model"):  # model without picks for this question -> the rule cut
-            clips += _highlights(seg, sig, cfg, rev, start, (prompts or {}).get(seg.n))
-            start = 1 - start
-            continue
-        if mode in ("interleave", "sequential"):
-            clips += (_interleave(seg, sig, cfg, rev, start) if mode == "interleave"
-                      else _sequential(seg, rev, cfg, start, sig))
-            start = 1 - start
-            continue
-        a, b = sorted(PLAYERS, key=lambda p: rev[p])
-        a_start = max(0.0, rev[a] - lay["reveal_before"])
-        for j, r0, r1, why in _alternate(seg, sig, cfg, a_start, start):
-            clips.append({"question": seg.n, "team": PLAYERS[j], "r0": round(r0, 2), "r1": round(r1, 2), "why": why})
-        a_end = min(seg.tracks[a].length, rev[a] + lay["reveal_after"])
-        clips.append({"question": seg.n, "team": a, "r0": round(a_start, 2), "r1": round(a_end, 2),
-                      "why": f"{a} reveal ({seg.tracks[a].tier})"})
-        b_start = rev[b] - lay["reveal_before"]
-        if b_start > a_end:
-            b_start, why = a_end, f"{b} still answering, then reveal ({seg.tracks[b].tier})"
-        else:
-            why = f"{b} reveal ({seg.tracks[b].tier})" + (" - replayed from just before their card"
-                                                          if b_start < a_end else "")
-        b_end = min(seg.tracks[b].length, rev[b] + lay["reveal_after"])
-        clips.append({"question": seg.n, "team": b, "r0": round(max(0.0, b_start), 2), "r1": round(b_end, 2),
-                      "why": why})
-        start = 1 - PLAYERS.index(b)  # open the next question on the team we didn't just end on
+        shown, flashed, _ = split_teams(full, sig, cfg, picks)
+        seg = timeline.Segment(full.n, full.master_start, full.length, {p: full.tracks[p] for p in shown})
+        n_before = len(clips)
+        clips += _plan_question(seg, sig, cfg, rev, start, prompts, picks)
+        q_clips = clips[n_before:]
+        for p in flashed:
+            _insert_flash(q_clips, full, p, rev, cfg)
+        clips[n_before:] = q_clips
+        start = 1 - start
     # merge adjacent clips of the same team that are continuous
     merged: list[dict] = []
     for c in clips:
         m = merged[-1] if merged else None
         if (m and m["question"] == c["question"] and m["team"] == c["team"] and abs(m["r1"] - c["r0"]) < 1e-6
-                and m.get("speed") == c.get("speed")):
+                and m.get("speed") == c.get("speed") and m.get("flex") == c.get("flex")):
             m["r1"] = c["r1"]
             m["why"] += " + " + c["why"]
         else:
             merged.append(dict(c))
     return [c for c in merged if c["r1"] - c["r0"] > 0.05]
+
+
+def _plan_question(seg: timeline.Segment, sig: Signals, cfg: dict, rev: dict, start: int,
+                   prompts: dict | None, picks: dict | None) -> list[dict]:
+    """Clips for one question between exactly two teams (seg.tracks)."""
+    lay = cfg["layout"]
+    T = list(seg.tracks)
+    clips: list[dict] = []
+    mode = lay.get("answering", "interleave")
+    q_picks = ((picks or {}).get(str(seg.n)) or {}).get("clips") if mode == "model" else None
+    if q_picks:
+        return apply_picks(seg, sig, cfg, rev, start, (prompts or {}).get(seg.n), q_picks)
+    if mode in ("highlights", "model"):  # model without picks for this question -> the rule cut
+        return _highlights(seg, sig, cfg, rev, start, (prompts or {}).get(seg.n))
+    if mode in ("interleave", "sequential"):
+        return (_interleave(seg, sig, cfg, rev, start) if mode == "interleave"
+                else _sequential(seg, rev, cfg, start, sig))
+    a, b = sorted(T, key=lambda p: rev[p])
+    a_start = max(0.0, rev[a] - lay["reveal_before"])
+    for j, r0, r1, why in _alternate(seg, sig, cfg, a_start, start):
+        clips.append({"question": seg.n, "team": T[j], "r0": round(r0, 2), "r1": round(r1, 2), "why": why})
+    a_end = min(seg.tracks[a].length, rev[a] + lay["reveal_after"])
+    clips.append({"question": seg.n, "team": a, "r0": round(a_start, 2), "r1": round(a_end, 2),
+                  "why": f"{a} reveal ({seg.tracks[a].tier})"})
+    b_start = rev[b] - lay["reveal_before"]
+    if b_start > a_end:
+        b_start, why = a_end, f"{b} still answering, then reveal ({seg.tracks[b].tier})"
+    else:
+        why = f"{b} reveal ({seg.tracks[b].tier})" + (" - replayed from just before their card"
+                                                      if b_start < a_end else "")
+    b_end = min(seg.tracks[b].length, rev[b] + lay["reveal_after"])
+    clips.append({"question": seg.n, "team": b, "r0": round(max(0.0, b_start), 2), "r1": round(b_end, 2),
+                  "why": why})
+    return clips
 
 
 def load_picks(sess: Session) -> dict | None:
@@ -555,15 +678,23 @@ def load_picks(sess: Session) -> dict | None:
     if not f.exists():
         return None
     d = json.loads(f.read_text(encoding="utf-8"))
-    return {str(k): v for k, v in (d.get("questions") or {}).items()}
+    out = {str(k): v for k, v in (d.get("questions") or {}).items()}
+    for k in ("intro", "results", "drop_questions"):
+        if d.get(k):
+            out[k] = d[k]
+    return out
 
 
 def build(sess: Session, sync: dict, cfg: dict, log=print) -> dict:
     c = cfg["cut"]
     fps = cfg["output"]["fps"]
+    picks = load_picks(sess) if cfg["layout"].get("answering") == "model" else None
+    # picks.json "drop_questions" drops questions for this session only (config's applies to every session)
+    drop = sorted(set(cfg.get("drop_questions") or []) | set((picks or {}).get("drop_questions") or []))
+    cfg = {**cfg, "groups": groups(sync, cfg), "drop_questions": drop}
     segs = {s.n: s for s in timeline.build(sync, cfg)}
     sig = Signals(sess, cfg)
-    picks = load_picks(sess) if cfg["layout"].get("answering") == "model" else None
+    sink_pad = float(cfg["speed"].get("sink_pad", 0.4))
     clips = plan_clips(list(segs.values()), sig, cfg, {q['n']: q.get('prompt') for q in sync['questions']}, picks)
     keeps, cuts = [], []
     out_t = 0.0
@@ -602,17 +733,36 @@ def build(sess: Session, sync: dict, cfg: dict, log=print) -> dict:
             for x0, x1, speed, why in _speed_runs(a, b, cl, tr, rr, sr, sig, cfg):
                 if cl.get("speed") is not None and why == "boring":
                     speed, why = float(cl["speed"]), "picked speed"
-                keeps.append({"question": cl["question"], "team": p, "r0": round(x0, 3), "r1": round(x1, 3),
-                              "speed": speed, "speed_why": why, "out_start": round(out_t, 3)})
-                out_t += (x1 - x0) / speed
+                # flexible = may be sped up (up to speed.filler_max) to hit output.target_seconds:
+                # the model's own picks, and the answer sinking between submit and the card
+                parts = [(x0, x1, bool(cl.get("flex")) and why == "boring")]
+                if why == "boring" and sr is not None and rr is not None and rr - sr > 2 * sink_pad:
+                    s0, s1 = sr + sink_pad, rr - sink_pad
+                    parts = [(u0, u1, f or (s0 <= u0 and u1 <= s1))
+                             for u0, u1, f in ((x0, min(x1, max(x0, s0)), parts[0][2]),
+                                               (max(x0, s0), min(x1, s1), parts[0][2]),
+                                               (max(x0, min(x1, s1)), x1, parts[0][2]))]
+                for u0, u1, flex in parts:
+                    if u1 - u0 < 0.05:
+                        continue
+                    k = {"question": cl["question"], "team": p, "r0": round(u0, 3), "r1": round(u1, 3),
+                         "speed": speed, "speed_why": why}
+                    if flex:
+                        k["flex"] = True
+                    keeps.append(k)
 
+    fit = fit_to_target(keeps, cfg)
+    for k in keeps:
+        k["out_start"] = round(out_t, 3)
+        out_t += _frames(k, fps) / fps
     per_q: dict = {}
     for k in keeps:
-        per_q[k["question"]] = per_q.get(k["question"], 0) + (k["r1"] - k["r0"]) / k["speed"]
+        per_q[k["question"]] = per_q.get(k["question"], 0) + _frames(k, fps) / fps
     fast = [k for k in keeps if k["speed"] != 1.0]
     return {
         "fps": fps,
-        "total_seconds": round(out_t, 2),
+        "fit": fit,
+        "total_seconds": round(out_t, 3),
         "kept_seconds": round(sum(k["r1"] - k["r0"] for k in keeps), 2),
         "sped_up_seconds": round(sum(k["r1"] - k["r0"] for k in fast), 2),
         "clips_seconds": round(sum(cl["r1"] - cl["r0"] for cl in clips), 2),
@@ -621,6 +771,54 @@ def build(sess: Session, sync: dict, cfg: dict, log=print) -> dict:
         "keep": keeps,
         "cuts": cuts,
     }
+
+
+def _frames(k: dict, fps: float) -> int:
+    """Output frames of one keep piece - the same rounding render.make_plan uses."""
+    return int(round((k["r1"] - k["r0"]) / k["speed"] * fps))
+
+
+def fit_to_target(keeps: list[dict], cfg: dict) -> dict | None:
+    """Speed the flexible pieces (model picks, the answer sinking) up from speed.boring to at most
+    speed.filler_max so the reel lands exactly on output.target_seconds (frame-exact). Returns what
+    happened; if even filler_max is too long, or boring speed is already too short, says by how much."""
+    target = cfg["output"].get("target_seconds")
+    if not target:
+        return None
+    fps = cfg["output"]["fps"]
+    lo = float(cfg["speed"]["boring"])
+    hi = max(lo, float(cfg["speed"].get("filler_max", lo)))
+    flex = [k for k in keeps if k.get("flex")]
+    fixed = sum(_frames(k, fps) for k in keeps if not k.get("flex"))
+    tgt = int(round(target * fps))
+
+    def total(s: float) -> int:
+        return fixed + sum(int(round((k["r1"] - k["r0"]) / s * fps)) for k in flex)
+
+    if not flex or total(lo) <= tgt:
+        s, status = lo, "short"
+    elif total(hi) > tgt:
+        s, status = hi, "long"
+    else:
+        a, b = lo, hi
+        for _ in range(50):
+            m = (a + b) / 2
+            a, b = (m, b) if total(m) > tgt else (a, m)
+        s, status = b, "exact"
+    s = min(hi, np.ceil(s * 1e4) / 1e4) if status == "exact" else s  # round up: leftover frames get added, never cut
+    for k in flex:
+        k["speed"], k["speed_why"] = round(s, 4), "filler (fit to length)"
+    n = sum(_frames(k, fps) for k in keeps)
+    if status == "exact" and n != tgt:  # rounding: re-time the longest flexible piece by the leftover frames
+        k = max(flex, key=lambda k: k["r1"] - k["r0"])
+        f = _frames(k, fps) + (tgt - n)
+        k["speed"] = (k["r1"] - k["r0"]) * fps / f
+        n = sum(_frames(k, fps) for k in keeps)
+    return {"target_seconds": target, "seconds": round(n / fps, 3), "filler_speed": round(s, 3), "status": status,
+            "flexible_source_seconds": round(sum(k["r1"] - k["r0"] for k in flex), 2),
+            "note": {"exact": "lands exactly on the target",
+                     "long": f"{(n - tgt) / fps:.1f}s too long even with filler at {hi}x - cut picks",
+                     "short": f"{(tgt - n) / fps:.1f}s short with everything at {lo}x - add picks"}[status]}
 
 
 def _speed_runs(a: float, b: float, cl: dict, tr: timeline.Track, rr: float | None, sr: float | None,

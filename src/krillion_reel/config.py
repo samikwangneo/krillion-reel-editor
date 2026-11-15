@@ -21,9 +21,13 @@ DEFAULTS: dict = {
     "cam_audio_track": {"p1": None, "p2": None},
     "questions": 7,
     "drop_questions": [],
+    # sides when there are more than two players, e.g. [["p1", "p2"]] = roommates vs everyone else.
+    # Usually set per session in sync.json "groups". Each question shows one member of a group.
+    "groups": [],
     "tiers": ["nothing landed", "plankton", "schooler", "rare", "deep cut", "one in a krillion"],  # nothing landed = timed out / no score
     # lead: seconds of prompt card shown before each clock start; ending: hold on the results screen
-    "timeline": {"lead": 3.5, "include_results": True, "ending_hold": 3.5},
+    # intro: the team whose cam opens the reel (the host's intro before the first prompt), null = none
+    "timeline": {"lead": 3.5, "include_results": True, "ending_hold": 2.0, "intro": "p1"},
     # cut a gap only if the ON-SCREEN team is silent and their game screen is static, and never while
     # they're still thinking (prompt card -> answer submitted) when protect_thinking is on
     "cut": {"min_gap": 1.5, "padding": 0.4, "protect_before": 0.5, "protect_after": 2.0,
@@ -35,14 +39,18 @@ DEFAULTS: dict = {
     "speed": {"enabled": True, "boring": 1.25, "normal_tiers": ["deep cut", "one in a krillion"],
               "around_reveal": [0.3, 3.0], "reaction_max": 6.0, "reaction_percentile": 93, "reaction_pad": [0.5, 1.5],
               "slow_submit": False, "around_submit": [1.5, 0.5], "slow_reactions": False, "slow_results": False,
-              "min_fast": 2.0},
+              "min_fast": 2.0,
+              # filler (the model's picks + the answer sinking between submit and the card) may go up to
+              # this speed so the reel lands on output.target_seconds
+              "filler_max": 1.5, "sink_pad": 0.4},
     # One team on screen at a time (their cam on top, their game below), cutting between teams.
     "layout": {
         "answering": "model",    # model | highlights | interleave | sequential | alternate (see edl.py)
         "highlights": {          # answering: highlights - the shorter cut
-            "think_after_read": 5.0,     # each team's first seconds of thinking after reading the prompt
+            "think_after_read": 3.0,     # first seconds of thinking after the prompt is read (reading team)
+            "think_after_read_other": 0.0,  # same for the other team (0 = not required)
             "middle": 4.0,               # liveliest bit of each team's discussion in between
-            "end_before_submit": 10.0,   # always keep each team's last seconds before submitting
+            "end_before_submit": 5.0,    # always keep each team's last seconds before submitting
             "no_cut_before_submit": 3.0, # final shot runs uncut from here through the card + reaction
             "read_max": 8.0,             # look this long (after the segment start) for them reading aloud
             "read_fallback": 1.5,        # nobody read it aloud: show the prompt until clock start + this
@@ -55,6 +63,7 @@ DEFAULTS: dict = {
         "max_shot": 8.0,         # and force a switch after this long so it keeps alternating
         "min_cam_height": 620,   # cam band never shorter than this (game is scaled to the rest)
         "bottom_safe": 150,      # px kept clear at the bottom for the IG account name / caption
+        "flash": [0.3, 1.7],     # 3+ players: a non-featured team's card, from 0.3s before to 1.7s after
     },
     "zoom": {
         "enabled": True,
@@ -76,11 +85,15 @@ DEFAULTS: dict = {
     "whisper": {"model": "small.en", "device": "cpu", "compute_type": "int8", "language": "en"},
     # audio follows the on-screen team: their mic + their game sound (if the screen recording has it)
     "audio": {"lufs": -14, "game_audio_db": -12},
-    "output": {"width": 1080, "height": 1920, "fps": 30, "max_seconds": None, "preset": "veryfast", "crf": 20,
+    # target_seconds: filler speed is fitted so the reel lands exactly here (IG pushes reels <= 2:59)
+    "output": {"width": 1080, "height": 1920, "fps": 30, "max_seconds": 179, "target_seconds": 179,
+               "preset": "veryfast", "crf": 20,
                "workers": 1},   # workers: render this many chunks in parallel
 }
 
-SOURCES = ("p1_screen", "p2_screen", "p1_cam", "p2_cam")
+# Players in the current session (p1, p2, ... - whoever has a pN_screen and a pN_cam file).
+# resolve_session() fills this in place, so every module that imported it sees the same list.
+PLAYERS: list[str] = ["p1", "p2"]
 
 
 def _merge(base: dict, over: dict) -> dict:
@@ -130,14 +143,23 @@ def resolve_session(cfg: dict, session_dir: str | None) -> Session:
     name = raw.name if raw != raw_root else "default"
     files: dict[str, Path] = {}
     entries = list(raw.iterdir())
-    for key in SOURCES:
-        pat = cfg["files"][key].lower()
+
+    def find(key: str) -> list[Path]:
+        pat = (cfg["files"].get(key) or f"{key}.*").lower()
         stem = pat.split(".")[0]
-        hits = [p for p in entries if p.is_file() and p.stem.lower() == stem
+        return [p for p in entries if p.is_file() and p.stem.lower() == stem
                 and (pat.endswith(".*") or p.name.lower() == pat)]
-        if len(hits) != 1:
-            raise SystemExit(f"expected exactly one file matching {cfg['files'][key]!r} in {raw}, found {[h.name for h in hits]}")
-        files[key] = hits[0]
+
+    players = [f"p{n}" for n in range(1, 10) if find(f"p{n}_screen") or find(f"p{n}_cam")]
+    if len(players) < 2:
+        raise SystemExit(f"need at least p1 and p2 recordings in {raw}")
+    for p in players:
+        for key in (f"{p}_screen", f"{p}_cam"):
+            hits = find(key)
+            if len(hits) != 1:
+                raise SystemExit(f"expected exactly one file matching {key}.* in {raw}, found {[h.name for h in hits]}")
+            files[key] = hits[0]
+    PLAYERS[:] = players
     out = Path(cfg["out_root"]) / name
     work = Path(cfg["work_root"]) / name
     out.mkdir(parents=True, exist_ok=True)
