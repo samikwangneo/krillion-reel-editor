@@ -19,6 +19,8 @@ tier / answer), the transcripts (WhisperX) and each cam's offset (`cam_t = scree
 * **Questions.** Every question needs a tier for both teams. If `tier` is null, look at the frames
   in `work/dayN/pX_screen_ocr/` (4 per second, file = round(t*4)). A timeout shows a
   NOTHING LANDED card. Fill in `reveal` and `tier` in `out/dayN/sync.json` by hand and add a note.
+  The frame each card holds on is `tier_end - 0.25`: it must still show the card (day 5 froze on a
+  "checking your result" frame because tier_end was 0.5s late; sync now refines it at 4 fps).
 * **Cam offsets.** This is the step that went wrong before, so check it carefully.
   * `audio_xcorr` with confidence over 3 and agreeing windows: the cam heard the game, so trust it.
   * `sfx_match`: the game's own sound effects found waveform-exact in the cam mic. 5+ events agreeing
@@ -42,12 +44,14 @@ jokes, roasts, near-misses and good arguments, and cut filler. The rules (prompt
 thinking after it, each team's last 5s before submitting, the uncut submit -> reaction shot) are
 enforced automatically afterwards.
 * **Length: exactly 2:59** (`output.target_seconds: 179`). Your picks and the answer sinking are
-  filler, sped between 1.25x and 1.5x to land on 179s. `cut` prints the fit: add or drop picks until it
+  filler, sped between 1.25x and 1.55x to land on 179s. `cut` prints the fit: add or drop picks until it
   says "lands exactly on the target".
 * **Intro.** Keep most of p1's intro as `"intro"` in picks.json (only cut mic checks like "testing").
 * **Ending.** Post-game banter (roasts after the last card) can be kept: set
   `"results_window": {"p1": [scr_t0, scr_t1], ...}` in sync.json and pick from it with
   `"results": {"clips": [{"team", "r0", "r1"}]}` (r = seconds into that window, played in list order).
+  End on p1's own sign-off and watch p1's cam to the end of the recording (day 5: they hold up the
+  keyboard after the last line; the user wanted that in).
 * **Fit fast.** Start picks lean (one short clip per team per middle). The fixed parts (deep cuts at
   1x, ~11s each) eat most of the budget; drop the weakest question early if over by 25s+.
 * **3+ players** (day 4 had a guest): set `"groups": [["p1", "p2"]]` in sync.json (roommates vs the

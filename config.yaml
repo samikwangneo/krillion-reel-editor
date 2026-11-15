@@ -45,7 +45,7 @@ speed:                    # everything plays at `boring` speed, except...
   slow_reactions: false       # true: also 1x for every loud reaction
   slow_results: false         # true: final score at 1x
   min_fast: 2.0               # 1.25x stretches shorter than this stay 1x
-  filler_max: 1.5             # filler (model picks + answer sinking) may go up to this to hit target_seconds
+  filler_max: 1.55            # filler (model picks + answer sinking) may go up to this to hit target_seconds
   sink_pad: 0.4               # "answer sinking" = submit + this .. card - this
 layout:
   answering: model        # model = Claude picks the clips from out/<session>/brief.md into picks.json

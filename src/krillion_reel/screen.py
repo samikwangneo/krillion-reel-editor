@@ -316,6 +316,11 @@ def detect_events(src: Path, crop: GameCrop, work: Path, key: str, tiers: list[s
                 if misses >= 2:
                     break
             t += 0.5
+        # the 2 fps scan can land up to 0.5s after the click, and the renderer would then hold a
+        # "checking your result" / blank frame (day 5 Q7): refine on the 4 fps frame in between
+        if first_miss is not None and first_miss - 0.25 > found + 0.5 \
+                and not _has_card_button(_bottom_texts(load(first_miss - 0.25))):
+            first_miss -= 0.25
         q.tier_end = round(min(first_miss if first_miss is not None else t, limit), 2)
         questions.append(q)
         log(f"  {key} Q{q.n}: clock {q.clock_start:6.1f}  submit {q.submit:6.1f}  reveal {q.reveal}  "
