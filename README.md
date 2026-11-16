@@ -1,4 +1,4 @@
-# krillion-reel
+# krillion-reel-editor
 
 Turns raw Krillion 1v1 footage into a vertical 1080x1920 Instagram Reel.
 
