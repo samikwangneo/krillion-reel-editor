@@ -20,6 +20,9 @@ class Track:
     tier: str | None
     offset: float     # cam_offset (cam_t = screen_t + offset)
     submit: float | None = None  # screen time the answer was submitted (DIVE)
+    # screen time this player's next part starts (next prompt's segment, or the results screen).
+    # A held tier card may only run until here: past it their cam is already on the next question.
+    hold_until: float | None = None
 
     def screen_t(self, r: float, fps: float) -> float:
         return self.start + min(r, max(0.0, self.length - 1.0 / fps))
@@ -62,12 +65,18 @@ def build(sync: dict, cfg: dict) -> list[Segment]:
             segs.append(Segment(-1, m, end - start, {intro: Track(start=start, length=end - start, reveal=None,
                                                                   tier=None, offset=offs[intro])}))
             m += end - start
-    for q in sync["questions"]:
+    res = sync.get("results") or {}
+    qs = sync["questions"]
+    for i, q in enumerate(qs):
         if q["n"] in drop or not all(q.get(p) for p in PLAYERS):
             continue
         tracks = {}
         for p in PLAYERS:
             e = q[p]
+            # next part for this player, even if that question is dropped (its talk still isn't ours)
+            nxt = next((x[p]["clock_start"] - lead for x in qs[i + 1:] if x.get(p)), None)
+            if nxt is None and res.get(p) is not None:
+                nxt = res[p] - 0.3
             start = e["clock_start"] - lead
             end = e.get("tier_end")
             if end is None:  # no card found: keep through the would-be reveal window
@@ -79,11 +88,10 @@ def build(sync: dict, cfg: dict) -> list[Segment]:
             if e.get("reveal") is not None:
                 end = max(end, e["reveal"] + 0.35)  # card fully faded in
             tracks[p] = Track(start=start, length=end - start, reveal=e.get("reveal"), tier=e.get("tier"),
-                              offset=offs[p], submit=e.get("submit"))
+                              offset=offs[p], submit=e.get("submit"), hold_until=nxt)
         length = max(t.length for t in tracks.values())
         segs.append(Segment(q["n"], m, length, tracks))
         m += length
-    res = sync.get("results") or {}
     if cfg["timeline"]["include_results"] and all(res.get(p) is not None for p in PLAYERS):
         hold = cfg["timeline"]["ending_hold"]
         # sync.json "results_window": {team: [screen_t0, screen_t1]} widens the ending so picks.json

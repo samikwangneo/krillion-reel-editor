@@ -87,3 +87,17 @@ def test_rules_fill_gaps_without_overriding_picks_or_going_backwards():
     for p in ("p1", "p2"):  # every team's footage only moves forward
         mine = [c for c in clips if c["team"] == p]
         assert all(b["r0"] >= a["r1"] - 1e-6 for a, b in zip(mine, mine[1:])), mine
+
+
+def test_reveal_never_holds_into_next_question():
+    """Day 6: a deep cut reaction ran past DESCEND, so the card froze while the cam was already
+    reading the next prompt (which then played again). The reveal shot must stop at the next part."""
+    cfg = DEFAULTS
+    # card at r 16, DESCEND at r 17.35 (track end), next question's segment starts at screen 20.6
+    tr = Track(start=3.4, length=17.35, reveal=19.4, tier="deep cut", offset=0.0, submit=15.0, hold_until=20.6)
+    seg = Segment(1, 0.0, 30.0, {"p1": tr})
+    end = edl._reveal_end(seg, "p1", 16.0, None, cfg)
+    assert end <= 17.35 + 1e-6, end
+    # with a gap before the next part, the card may still hold a little past DESCEND (day 5)
+    tr.hold_until = 25.0
+    assert edl._reveal_end(seg, "p1", 16.0, None, cfg) > 17.35

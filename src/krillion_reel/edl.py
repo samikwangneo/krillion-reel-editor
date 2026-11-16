@@ -180,10 +180,16 @@ def _reveal_end(seg: timeline.Segment, p: str, rev: float, sig: Signals | None, 
     lay, sp = cfg["layout"], cfg["speed"]
     tr = seg.tracks[p]
     if tr.tier not in sp.get("normal_tiers", []) or sig is None:
-        return rev + lay["reveal_after"]
-    end = rev + lay.get("big_reveal_after", 4.0)
-    while end < rev + sp.get("reaction_max", 6.0) and sig.reacting(p, tr.cam_t(end)):
-        end += 1 / GRID
+        end = rev + lay["reveal_after"]
+    else:
+        end = rev + lay.get("big_reveal_after", 4.0)
+        while end < rev + sp.get("reaction_max", 6.0) and sig.reacting(p, tr.cam_t(end)):
+            end += 1 / GRID
+    # never hold the card into the player's next question: their cam is already reading the next
+    # prompt there, which then plays again in that question (day 6: Q1/Q2 froze on the card while
+    # the cam talked about the next prompt)
+    if tr.hold_until is not None:
+        end = min(end, max(tr.length, tr.hold_until - tr.start))
     return end
 
 
@@ -610,7 +616,8 @@ def plan_clips(segs: list[timeline.Segment], sig: Signals, cfg: dict,
                 r0, r1 = max(0.0, float(c["r0"])), min(full.tracks[p].length, float(c["r1"]))
                 if r1 - r0 >= 0.3:
                     clips.append({"question": 0, "team": p, "r0": round(r0, 2), "r1": round(r1, 2),
-                                  "why": "final score" + (f": {c['why']}" if c.get("why") else "")})
+                                  "why": "final score" + (f": {c['why']}" if c.get("why") else ""),
+                                  "speed": c.get("speed")})  # e.g. 1.0 so a score stays up long enough
             continue
         rev = {}
         for p in full.tracks:
@@ -679,7 +686,7 @@ def load_picks(sess: Session) -> dict | None:
         return None
     d = json.loads(f.read_text(encoding="utf-8"))
     out = {str(k): v for k, v in (d.get("questions") or {}).items()}
-    for k in ("intro", "results", "drop_questions"):
+    for k in ("intro", "results", "drop_questions", "speed"):
         if d.get(k):
             out[k] = d[k]
     return out
@@ -692,6 +699,10 @@ def build(sess: Session, sync: dict, cfg: dict, log=print) -> dict:
     # picks.json "drop_questions" drops questions for this session only (config's applies to every session)
     drop = sorted(set(cfg.get("drop_questions") or []) | set((picks or {}).get("drop_questions") or []))
     cfg = {**cfg, "groups": groups(sync, cfg), "drop_questions": drop}
+    # picks.json "speed" overrides config speed settings for this session, e.g. {"normal_tiers": []}
+    # (day 6: deep cut reveals at the boring speed instead of 1x)
+    if (picks or {}).get("speed"):
+        cfg["speed"] = {**cfg["speed"], **picks["speed"]}
     segs = {s.n: s for s in timeline.build(sync, cfg)}
     sig = Signals(sess, cfg)
     sink_pad = float(cfg["speed"].get("sink_pad", 0.4))

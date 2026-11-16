@@ -46,12 +46,18 @@ enforced automatically afterwards.
 * **Length: exactly 2:59** (`output.target_seconds: 179`). Your picks and the answer sinking are
   filler, sped between 1.25x and 1.55x to land on 179s. `cut` prints the fit: add or drop picks until it
   says "lands exactly on the target".
-* **Intro.** Keep most of p1's intro as `"intro"` in picks.json (only cut mic checks like "testing").
+* **Intro.** Keep most of p1's intro as `"intro"` in picks.json (only cut mic checks like "testing"
+  and setup chatter like checking who's in frame).
 * **Ending.** Post-game banter (roasts after the last card) can be kept: set
   `"results_window": {"p1": [scr_t0, scr_t1], ...}` in sync.json and pick from it with
   `"results": {"clips": [{"team", "r0", "r1"}]}` (r = seconds into that window, played in list order).
   End on p1's own sign-off and watch p1's cam to the end of the recording (day 5: they hold up the
-  keyboard after the last line; the user wanted that in).
+  keyboard after the last line; the user wanted that in). Keep the ending short (~15s, day 6), and
+  **show both final scores** so viewers know who won: p1's score for 1s+ (results clips take
+  `"speed": 1.0`; p1 often scrolls away from the score fast), then cut back to p2 on theirs.
+* **Too long?** Before dropping questions, play deep cuts at 1.25x for that session with
+  `"speed": {"normal_tiers": []}` in picks.json (day 6: user preferred all questions over 1x reveals).
+  Drop at most one question.
 * **Fit fast.** Start picks lean (one short clip per team per middle). The fixed parts (deep cuts at
   1x, ~11s each) eat most of the budget; drop the weakest question early if over by 25s+.
 * **3+ players** (day 4 had a guest): set `"groups": [["p1", "p2"]]` in sync.json (roommates vs the
